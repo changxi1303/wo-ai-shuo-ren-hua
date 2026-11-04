@@ -450,6 +450,9 @@ function wantThinking(cfg) {
 // 但实测多问 2 条要 +285ms（+37%），而新提示词下 160 条样本零踩雷，
 // 所以只多要 1 条：既留过滤余量，又把延迟压回来。
 function askCount(n, cfg) {
+  // 开重排时要多要几条，否则排完还是原来那几条，等于白花一次裁判调用。
+  // 多要的条数受 rankPoolMax 夹住：n=3 时问 6 条，n=5 时问 8 条。
+  if (cfg.rerank !== false) return clamp(n + (LIMITS.rankExtra || 3), n, LIMITS.rankPoolMax || 8);
   if (cfg.hardFilter === false) return n;
   return clamp(n + 1, n, 8);
 }
@@ -482,19 +485,29 @@ function buildRequest(cfg, msg, refining) {
     ? buildRefineUser(tweetText, String(msg.prev || "").slice(0, 500), String(msg.feedback || "").slice(0, 500), ask, replies, { notes: notes })
     : buildUser(tweetText, ask, replies, { notes: notes, imageCount: images.length });
 
+  // 重排会让 ask 变大（n=3 时从 4 条变 6 条），token 预算要跟着抬，
+  // 否则第 5、6 条会被截断，白问。80 token/条 是按上限 50 个中文字估的。
+  // ask=4 时 4*80=320 < 默认 400，所以对没开重排的老路径毫无影响。
+  var maxTok = clamp(Math.max(toInt(cfg.maxTokens, 400), ask * 80), 50, 4000);
+
   var body = {
     model: model,
     messages: [
       { role: "system", content: buildSystem(cfg, refining) },
       { role: "user", content: buildContent(userText, images) }
     ],
-    max_tokens: clamp(toInt(cfg.maxTokens, 400), 50, 4000),
+    max_tokens: maxTok,
     temperature: clamp(parseFloat(cfg.temperature) || DEF.temperature, 0, 2)
   };
   var th = wantThinking(cfg);
   if (th !== undefined) body.enable_thinking = th;
 
-  return { base: base, body: body, n: n, ask: ask, replies: replies, notes: notes, images: images, useVision: useVision, model: model };
+  return {
+    base: base, body: body, n: n, ask: ask, replies: replies, notes: notes,
+    images: images, useVision: useVision, model: model,
+    // 重排要用：原帖文本（判据要对着原帖判）和开关
+    tweetText: tweetText, rerank: cfg.rerank !== false && !refining
+  };
 }
 
 // 把模型输出整理成统一的成功/失败结果
@@ -514,10 +527,14 @@ function shapeResult(res, req, refining) {
   }
   var f = req.cfgHardFilter === false ? { items: items, dropped: 0, droppedDetail: [], allBad: false } : hardFilter(items);
   if (!f.items.length) f.items = items;
+  // 重排池：过滤后、切片前的全集。applyRank 会从这个池子里排序再取前 n 条。
+  // 先切片再排就等于在已经被截断的集合里排，白问的那几条永远没机会。
+  var pool = req.rerank ? f.items.slice(0, LIMITS.rankPoolMax || 8) : null;
   if (f.items.length > req.n) f.items = f.items.slice(0, req.n);
   return {
     ok: true,
     items: f.items,
+    pool: pool,
     model: (res.data && res.data.model) || res.model || req.model,
     usage: (res.data && res.data.usage) || res.usage || null,
     comments: req.replies.length,
@@ -534,12 +551,118 @@ function shapeResult(res, req, refining) {
   };
 }
 
+// ---------- best-of-N 重排 ----------
+function resContent(res) {
+  if (!res) return "";
+  if (res.content != null) return String(res.content);
+  var d = res.data;
+  return String((d && d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || "");
+}
+
+// 解析裁判给的排序。裁判可能输出「3,1,5」、"3、1、5"、"排序：3 > 1 > 5"，
+// 也可能不听格式多写解释。策略：优先找「几乎只有数字和分隔符」的那一行，
+// 找不到再退回全文扫描。解析不出就返回 null，调用方按原顺序交付 —— 绝不因为裁判不听话而丢候选。
+function parseRank(text, n) {
+  var s = String(text || "");
+  if (!s) return null;
+  var lines = s.split(/\r?\n/);
+  var best = null;
+  for (var i = 0; i < lines.length; i++) {
+    var L = lines[i].trim();
+    if (!L) continue;
+    // 这一行除了数字和分隔符几乎没别的东西，才当成排序行
+    if (!/^[\d\s,，、.。;；:：\-–—>»()（）\[\]#]+$/.test(L)) continue;
+    var nums = L.match(/\d+/g);
+    if (!nums || nums.length < 2) continue;
+    if (!best || nums.length > best.length) best = nums;
+  }
+  var raw = best || (s.match(/\d+/g) || []);
+  var seen = {}, out = [];
+  for (var k = 0; k < raw.length; k++) {
+    var v = parseInt(raw[k], 10);
+    if (!(v >= 1 && v <= n)) continue;      // 越界或非法序号直接丢
+    if (seen[v]) continue;                   // 重复只取第一次出现
+    seen[v] = 1;
+    out.push(v - 1);                         // 转成 0 基下标
+  }
+  return out.length ? out : null;
+}
+
+function buildRankBody(cfg, pool, tweetText, model) {
+  var list = pool.map(function (t, i) { return (i + 1) + ". " + t; }).join("\n");
+  var user = "【原帖】\n" + (String(tweetText || "").slice(0, 2000) || "（原帖只有图片，没有文字）") +
+    "\n\n【候选，共 " + pool.length + " 条】\n" + list +
+    "\n\n按质量从最好到最差排序，只输出一行序号，用英文逗号分隔。";
+  var body = {
+    model: model,
+    messages: [
+      { role: "system", content: X.RANK_CRITERIA },
+      { role: "user", content: user }
+    ],
+    max_tokens: 80,          // 只输出一行序号，给多了纯浪费
+    temperature: 0           // 排序要可复现，不要随机
+  };
+  var th = wantThinking(cfg);
+  if (th !== undefined) body.enable_thinking = th;
+  return body;
+}
+
+// 裁判调用。任何失败（超时、报错、解析不出）都返回 null，由调用方退回原顺序。
+function rankRequest(req, cfg, pool) {
+  var model = String(cfg.rerankModel || "").trim() || req.model;
+  var body;
+  try { body = buildRankBody(cfg, pool, req.tweetText, model); } catch (e) { return Promise.resolve(null); }
+  var timeout = clamp(toInt(cfg.rerankTimeout, 12000), 2000, 60000);
+
+  var call = chatRequest(req.base, cfg.apiKey, body).then(function (res) {
+    if (!res || res.status < 200 || res.status >= 300) return null;
+    return parseRank(resContent(res), pool.length);
+  }, function () { return null; });
+
+  // 裁判卡住不能把用户一起卡住：超时就放弃重排
+  return new Promise(function (resolve) {
+    var done = false;
+    var fin = function (v) { if (!done) { done = true; resolve(v); } };
+    setTimeout(function () { fin(null); }, timeout);
+    call.then(fin, function () { fin(null); });
+  });
+}
+
+// 把重排结果套回交付结果。裁判漏给的候选按原顺序补到末尾 ——
+// 宁可顺序不完美，也不能因为裁判少报一个就让用户少看到一条候选。
+function applyRank(res, req, cfg) {
+  if (!res) return Promise.resolve(res);
+  var pool = res.pool;
+  if (pool) delete res.pool;              // 内部字段，不外泄给页面
+  if (!res.ok || !req.rerank || !pool || pool.length <= 1) {
+    res.ranked = false;
+    return Promise.resolve(res);
+  }
+  return rankRequest(req, cfg, pool).then(function (order) {
+    if (!order || !order.length) { res.ranked = false; return res; }
+    var picked = [], used = {};
+    order.forEach(function (i) {
+      if (pool[i] != null && !used[i]) { used[i] = 1; picked.push(pool[i]); }
+    });
+    pool.forEach(function (t, i) { if (!used[i]) picked.push(t); });
+    var changed = picked.slice(0, req.n).join("\u0000") !== res.items.join("\u0000");
+    res.items = picked.slice(0, req.n);
+    res.ranked = true;
+    res.rankPool = pool.length;
+    res.rankOrder = order.slice(0, pool.length).map(function (i) { return i + 1; });
+    res.rankChanged = changed;            // 顺序真的变了吗，用来决定要不要提示
+    return res;
+  }, function () { res.ranked = false; return res; });
+}
+
 function runChat(cfg, msg, refining) {
   var req = buildRequest(cfg, msg, refining);
   if (req.error) return Promise.resolve(req.error);
   req.cfgHardFilter = cfg.hardFilter;
   return chatRequest(req.base, cfg.apiKey, req.body).then(function (res) {
     return shapeResult(res, req, refining);
+  }).then(function (out) {
+    return applyRank(out, req, cfg);
   });
 }
 
@@ -573,6 +696,10 @@ function runChatStream(cfg, msg, refining, onPartial) {
     var out = shapeResult(res, req, refining);
     if (out.ok) out.streamed = true;
     return out;
+  }).then(function (out) {
+    // 重排放在流式结束之后：流式期间按生成顺序实时显示（首条 ~170ms 就出来），
+    // 排完再把最终顺序推给页面。先让用户看到东西，再看到更好的顺序，比干等强。
+    return applyRank(out, req, cfg);
   });
 }
 

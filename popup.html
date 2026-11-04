@@ -137,7 +137,9 @@
   <div class="toggles">
     <label class="tg"><input type="checkbox" id="autoLike"><span>回复后自动赞原帖</span></label>
     <label class="tg"><input type="checkbox" id="hardFilter"><span>踩雷硬过滤</span></label>
+    <label class="tg"><input type="checkbox" id="rerank"><span>质量重排</span></label>
   </div>
+  <div class="hint" style="margin-top:6px">「质量重排」= best-of-N：一次多生成 3 条，再用一次裁判调用按质量排序取最好的几条。<b>默认关闭，因为实测收益与噪声无法区分</b> —— 59 条留出帖、三个独立裁判多数表决下，交付干净率 95.5% → 96.6%（+1.1pp），逐帖只有 6 帖变好、4 帖变差；而代价是每次生成多一次 API 调用、排序晚约 0.8 秒、顺序会变。原因是开了踩雷硬过滤之后交付质量本来就有 95%，重排没什么可修的。想试可以打开；裁判超时或出错会自动退回原顺序，不会丢候选。</div>
   <div class="two" style="margin-top:9px">
     <div>
       <label for="autoLikeDelay">点赞基准延迟（毫秒）</label>

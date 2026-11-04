@@ -577,6 +577,8 @@
           if (meta2.refine) { old.refined = true; old.feedback = String(meta2.feedback || "").slice(0, 120); }
           if (meta2.comments) old.comments = meta2.comments;
           if (meta2.images) old.images = meta2.images;
+          // 重排名次要跟着刷新，否则旧的「最佳」标记会挂在已经不是第一的卡片上
+          if (meta2.ranked) old.rank = i + 1; else delete old.rank;
           delete old.superseded;
           cur.items.unshift(old);
           return;
@@ -590,6 +592,9 @@
       }
       if (meta2.comments) it.comments = meta2.comments;
       if (meta2.images) it.images = meta2.images;
+      // rank = 裁判给的质量名次（1 是最好）。只在开了重排时才有，
+      // 用来在卡片上标出「最佳」，否则用户看不出为什么第一条是第一条。
+      if (meta2.ranked) it.rank = i + 1;
       cur.items.unshift(it);
     });
     // 重新生成后，把被替换掉的旧版本标记为过期，避免新旧混在一起分不清
@@ -2335,7 +2340,8 @@
         prev: opts.prev,
         feedback: opts.feedback,
         comments: res.comments || 0,
-        images: res.images || 0
+        images: res.images || 0,
+        ranked: !!res.ranked
       };
       saveDrafts(ctx.id, ctx, res.items, saveOpts);
       var basis = [];
@@ -2344,6 +2350,9 @@
       if (saveOpts.notes) basis.push("备注 " + saveOpts.notes + " 条");
       var msg = (opts.refine ? "已按你的反馈重写 " : "已生成 ") + res.items.length + " 条草稿";
       if (res.dropped) msg += "，过滤掉 " + res.dropped + " 条踩雷的";
+      // 重排真的改了顺序才说，没改就别制造噪音
+      if (res.ranked && res.rankChanged) msg += "，已从 " + res.rankPool + " 条里排出质量序";
+      else if (res.ranked) msg += "，" + res.rankPool + " 条里排过序（顺序没变）";
       if (basis.length) msg += "（参考：" + basis.join("、") + "）";
       if (res.allBad) {
         msg = "⚠ 这 " + res.items.length + " 条都踩雷了，已标在卡片上。原因：" +
@@ -2683,6 +2692,8 @@
     ".tg2.refine{background:rgba(29,155,240,.18);color:#4ea9e8}",
     ".tg2.used{background:rgba(22,163,74,.18);color:#4ade80}",
     ".tg2.old{background:#242629;color:#5c646c}",
+    ".tg2.best{background:rgba(255,173,31,.2);color:#ffad1f}",
+    ".tg2.rank{background:#242629;color:#6b747c}",
     ".d.superseded{opacity:.5}",
     ".d.superseded:hover{opacity:.85}",
     /* 不满意 -> 反馈重写 */
@@ -2978,6 +2989,16 @@
     txt.addEventListener("click", function () { txt.classList.toggle("clip"); });
 
     var tags = el("div", { cls: "tags" });
+    // 重排后第一条才是裁判认为最好的那条。不标出来用户只会觉得顺序莫名其妙 ——
+    // 流式期间是按生成顺序显示的，排完会换位置。
+    if (item.rank === 1) {
+      tags.appendChild(el("span", {
+        cls: "tg2 best", text: "最佳",
+        title: "开了 best-of-N 重排：一次多生成几条，再由裁判模型按质量排序，这条排第一。\n流式显示时是按生成顺序的，排完才换成这个顺序。"
+      }));
+    } else if (item.rank > 1) {
+      tags.appendChild(el("span", { cls: "tg2 rank", text: "第" + item.rank, title: "裁判给的质量名次" }));
+    }
     if (item.refined) tags.appendChild(el("span", { cls: "tg2 refine", text: "已按备注重写", title: "依据：" + (item.feedback || "") }));
     if (item.superseded) tags.appendChild(el("span", { cls: "tg2 old", text: "旧版" }));
     if (item.used) tags.appendChild(el("span", { cls: "tg2 used", text: "已填入" }));

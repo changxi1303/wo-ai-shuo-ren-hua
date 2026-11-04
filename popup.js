@@ -15,7 +15,7 @@
   var TOGGLES = ["autoGenerate", "autoFill", "showAiBtn", "showFab", "translateUI",
     "highlightFollow", "trackInteractions", "useComments", "autoScrollComments",
     "disableThinking", "useVision", "autoLike", "hardFilter",
-    "followTrack", "followShowBadge"];
+    "followTrack", "followShowBadge", "rerank"];
 
   var CUSTOM = "__custom__";
 
