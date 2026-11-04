@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "我爱说人话",
-  "version": "2.16.1",
-  "description": "AI 回复候选 + 草稿箱复制/填入/备注 + 踩雷硬过滤 + 看图与评论区上下文 + 回复后自动点赞 + 互动追踪与诊断 + 未回关高亮 + 界面汉化",
+  "version": "2.17.0",
+  "description": "AI 回复候选 + 草稿箱复制/填入/备注 + 踩雷硬过滤 + 看图与评论区上下文 + 回复后自动点赞 + 互动追踪与诊断 + 未回关高亮 + 关注计数与防撞限 + 回关追踪 + 界面汉化",
   "permissions": ["storage", "clipboardWrite"],
   "host_permissions": [
     "https://x.com/*",
@@ -23,7 +23,7 @@
     },
     {
       "matches": ["https://x.com/*", "https://twitter.com/*"],
-      "js": ["defaults.js", "content.js"],
+      "js": ["defaults.js", "follow-stats.js", "content.js"],
       "css": ["content.css"],
       "run_at": "document_idle"
     }

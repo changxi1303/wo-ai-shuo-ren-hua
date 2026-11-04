@@ -20,16 +20,148 @@
 //
 // 运行在 MAIN world（manifest 里声明），必须在 document_start 就包住 fetch/XHR，
 // 否则 X 已经拿到原始引用了。
+//
+// ---------------------------------------------------------------------------
+// 关注/取关事件的识别、撞限判定、以及「你关注的人有没有回关你」的关系扫描，
+// 移植自 mikuairai/follow-counter（MIT License，Copyright (c) 2026 mikuairai）
+//   https://github.com/mikuairai/follow-counter
+// 完整许可文本见随仓库的 LICENSE.follow-counter。
+// 合并进本文件而不是单独注入一个脚本：两边都要包 fetch/XHR，分成两个脚本会双重包装。
+// 同时采纳了原作的两项机制：
+//   · __xrhOrig 保存浏览器原始 fetch/XHR —— 扩展热更新时新版从原函数重新包一层并替换旧版，
+//     不会越叠越多（旧版没有保存原函数，无法替换，只能等页面刷新）。
+//   · 同意门控 —— 关注追踪相关的读取默认完全关闭，只有 content.js 发来开启信号才读，
+//     并用 generation 计数让在途读取立即失效。
+// ---------------------------------------------------------------------------
 (function () {
   "use strict";
 
-  if (window.__XRH_INTERCEPT__) return;
+  var VERSION = 1;
+  // 已被更新版接管就不重复注入；旧版没存原函数的话只能等页面刷新
+  if (window.__XRH_INTERCEPT__ && !window.__xrhOrig) return;
+  if (window.__xrhVersion >= VERSION) return;
   window.__XRH_INTERCEPT__ = true;
+  window.__xrhVersion = VERSION;
+
+  var XHRp = window.XMLHttpRequest && window.XMLHttpRequest.prototype;
+  window.__xrhOrig = window.__xrhOrig || {
+    fetch: window.fetch,
+    open: XHRp && XHRp.open,
+    send: XHRp && XHRp.send
+  };
+  var ORIG = window.__xrhOrig;
 
   var MARK = "__xrh_api__";
+  var CTL = "__xrh_ctl__";
   var MAX_TWEETS = 400;      // 单次响应上限，防止异常大的 payload 拖慢页面
   var MAX_USERS = 600;
   var MAX_NODES = 30000;     // 深扫节点预算，防止病态 payload 卡住页面
+  var MAX_REL = 400;         // 单次关系扫描上报上限
+
+  // ---------- 关注追踪的同意门控 ----------
+  // 只认插件自己的开关信号；页面脚本即使伪造，数据到了 content.js 那边仍会因未同意被丢弃
+  var followOn = false;
+  var followGen = 0;
+  window.addEventListener("message", function (e) {
+    if (e.source !== window) return;
+    if (e.origin && e.origin !== window.location.origin) return;
+    if (!e.data || e.data.__xrhCtl !== CTL) return;
+    var next = e.data.on === true;
+    if (next !== followOn) followGen += 1;
+    followOn = next;
+  });
+  // 新装入时问一声当前是否已同意（content.js 可能比本脚本先就绪）
+  try { window.postMessage({ __xrh: MARK, type: "hello" }, window.location.origin); } catch (e) {}
+
+  // ---------- 关注 / 取关请求识别（移植自原作）----------
+  var REST_FOLLOW = /\/i\/api\/1\.1\/friendships\/(create|destroy)\.json/;
+  var GQL_FOLLOW = /\/graphql\/[^/]+\/(CreateFriendship|DestroyFriendship|Follow|Unfollow)\b/;
+  var LIMIT_CODES = [88, 161, 344];
+  var LIMIT_TEXT = /unable to follow|can't follow|cannot follow|limit|无法关注|上限|限制/i;
+
+  function classifyFollow(url) {
+    if (typeof url !== "string") return null;
+    var m = url.match(REST_FOLLOW);
+    if (m) return m[1] === "create" ? "follow" : "unfollow";
+    m = url.match(GQL_FOLLOW);
+    if (m) return /^(CreateFriendship|Follow)$/.test(m[1]) ? "follow" : "unfollow";
+    return null;
+  }
+
+  function findScreenName(body) {
+    if (!body || typeof body !== "object") return "";
+    if (typeof body.screen_name === "string") return body.screen_name;
+    var stack = [body], steps = 0;
+    while (stack.length && steps < 20000) {
+      var cur = stack.pop();
+      steps++;
+      if (cur && typeof cur === "object") {
+        if (typeof cur.screen_name === "string" && cur.screen_name) return cur.screen_name;
+        for (var k in cur) { if (cur[k] && typeof cur[k] === "object") stack.push(cur[k]); }
+      }
+    }
+    return "";
+  }
+
+  // 把一次关注/取关的结果整理成事件，交给 content.js 记账
+  function postFollowEvent(kind, status, text) {
+    var body = null;
+    try { body = JSON.parse(text); } catch (e) {}
+    var err = body && Array.isArray(body.errors) && body.errors[0];
+    var ok = status >= 200 && status < 300 && !err;
+    var code = err && typeof err.code === "number" ? err.code : null;
+    var message = err ? String(err.message || "") : "";
+    var limit = !ok && (status === 429 || LIMIT_CODES.indexOf(code) >= 0 || LIMIT_TEXT.test(message));
+    try {
+      window.postMessage({
+        __xrh: MARK, type: "followEvt",
+        event: {
+          type: kind, ok: ok, limit: limit, status: status, code: code, message: message,
+          user: ok ? findScreenName(body) : "",
+          path: window.location.pathname, ts: Date.now()
+        }
+      }, window.location.origin);
+    } catch (e) {}
+  }
+
+  // 找出响应里带关注关系的用户：你是否关注对方、对方是否关注你。
+  // 兼容旧字段 legacy.* 和新字段 relationship_perspectives。
+  function scanRelations(body) {
+    var out = [];
+    var stack = [body];
+    var steps = 0;
+    while (stack.length && steps < MAX_NODES && out.length < MAX_REL) {
+      var cur = stack.pop();
+      steps++;
+      if (!cur || typeof cur !== "object") continue;
+      if (cur.rest_id && (cur.legacy || cur.core)) {
+        var leg = cur.legacy || {};
+        var rp = cur.relationship_perspectives || {};
+        var name = leg.screen_name || (cur.core && cur.core.screen_name);
+        var following = leg.following === true || rp.following === true;
+        var notFollowing = leg.following === false || rp.following === false;
+        // f：你是否正在关注对方；只有字段明确存在时才上报「没关注」，避免数据不全时误删
+        if (name && (following || notFollowing)) {
+          out.push({ name: String(name), uid: String(cur.rest_id), f: following, fb: leg.followed_by === true || rp.followed_by === true });
+        }
+      }
+      for (var k in cur) {
+        var v = cur[k];
+        if (v && typeof v === "object") stack.push(v);
+      }
+    }
+    return out;
+  }
+
+  function postRelations(text) {
+    // 快速预筛：没有关系字段的响应直接跳过
+    if (text.indexOf("followed_by") < 0 && text.indexOf("relationship_perspectives") < 0) return;
+    var body;
+    try { body = JSON.parse(text); } catch (e) { return; }
+    var users = scanRelations(body);
+    if (!users.length) return;
+    try { window.postMessage({ __xrh: MARK, type: "followRel", users: users }, window.location.origin); } catch (e) {}
+  }
 
   function isGraphQL(url) {
     return typeof url === "string" && url.indexOf("/i/api/graphql/") >= 0;
@@ -207,8 +339,37 @@
     if (out) post(out);
   }
 
+  // ---------- 一个响应该观察什么 ----------
+  // followOn 为 false（未同意）时，关注类请求一律不观察，等于这部分数据一个字节都不读。
+  function plan(url, gen) {
+    if (typeof url !== "string" || !url) return null;
+    if (followOn && gen === followGen) {
+      var kind = classifyFollow(url);
+      if (kind) return { follow: kind, gen: gen };
+    }
+    if (!isGraphQL(url)) return null;
+    return { gql: true, url: url, rel: followOn && gen === followGen, gen: gen };
+  }
+
+  function observe(p, status, text) {
+    if (!p) return;
+    // 在途请求期间用户关掉了同意：立即作废，不上报
+    if ((p.follow || p.rel) && p.gen !== followGen) return;
+    if (p.follow) { postFollowEvent(p.follow, status, text); return; }
+    handleText(p.url, text);              // 原有：回复关系提取，行为不变
+    if (p.rel) postRelations(text);       // 新增：回关关系扫描，需同意
+  }
+
+  function xhrText(x) {
+    try {
+      if (x.responseType === "" || x.responseType === "text") return x.responseText;
+      if (x.response && typeof x.response === "object") return JSON.stringify(x.response);
+    } catch (e) {}
+    return "";
+  }
+
   // ---------- 包住 fetch ----------
-  var origFetch = window.fetch;
+  var origFetch = ORIG.fetch;
   if (typeof origFetch === "function") {
     window.fetch = function (input) {
       var url = "";
@@ -216,38 +377,40 @@
         url = typeof input === "string" ? input
           : (input && typeof input.url === "string") ? input.url : "";
       } catch (e) {}
-      var p = origFetch.apply(this, arguments);
-      if (!isGraphQL(url)) return p;
+      var p = plan(url, followGen);
+      var out = origFetch.apply(this, arguments);
+      if (!p) return out;
       // clone() 而不是直接读 body：不能干扰页面自己的消费
       try {
-        p.then(function (res) {
+        out.then(function (res) {
           if (!res || typeof res.clone !== "function") return;
-          res.clone().text().then(function (t) { handleText(url, t); }, function () {});
+          res.clone().text().then(function (t) { observe(p, res.status, t); }, function () {});
         }, function () {});
       } catch (e) {}
-      return p;
+      return out;
     };
   }
 
   // ---------- 包住 XMLHttpRequest ----------
   var XHR = window.XMLHttpRequest;
-  if (XHR && XHR.prototype) {
-    var origOpen = XHR.prototype.open;
-    var origSend = XHR.prototype.send;
+  if (XHR && XHR.prototype && typeof ORIG.open === "function") {
+    var origOpen = ORIG.open;
+    var origSend = ORIG.send;
     XHR.prototype.open = function (method, url) {
       try { this.__xrhUrl = typeof url === "string" ? url : String(url || ""); } catch (e) { this.__xrhUrl = ""; }
       return origOpen.apply(this, arguments);
     };
     XHR.prototype.send = function () {
       var self = this;
-      if (isGraphQL(self.__xrhUrl)) {
-        self.addEventListener("load", function () {
-          try {
-            if (self.responseType === "" || self.responseType === "text") handleText(self.__xrhUrl, self.responseText);
-          } catch (e) {}
-        });
+      var p = plan(self.__xrhUrl, followGen);
+      if (p) {
+        // loadend 而不是 load：撞限时请求可能是失败的，那一下正是要记的
+        self.addEventListener("loadend", function () { observe(p, self.status, xhrText(self)); });
       }
       return origSend.apply(this, arguments);
     };
   }
+
+  // 供测试直接调用，不依赖真实网络
+  window.__xrhClassifyFollow = classifyFollow;
 })();

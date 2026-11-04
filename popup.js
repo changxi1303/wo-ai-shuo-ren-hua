@@ -14,7 +14,9 @@
   var $ = function (id) { return document.getElementById(id); };
   var TOGGLES = ["autoGenerate", "autoFill", "showAiBtn", "showFab", "translateUI",
     "highlightFollow", "trackInteractions", "useComments", "autoScrollComments",
-    "disableThinking", "useVision", "autoLike", "hardFilter"];
+    "disableThinking", "useVision", "autoLike", "hardFilter",
+    "followTrack", "followShowBadge"];
+
   var CUSTOM = "__custom__";
 
   var statusEl = $("status");

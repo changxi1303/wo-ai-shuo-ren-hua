@@ -85,10 +85,16 @@
     if (opt.on) for (var e in opt.on) n.addEventListener(e, opt.on[e]);
     if (opt.style) n.style.cssText = opt.style;
     if (kids) {
-      (Array.isArray(kids) ? kids : [kids]).forEach(function (c) {
-        if (c == null || c === false) return;
-        n.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
-      });
+      // 递归展平：调用方常写 [节点, list.map(...), 节点]，中间那个是数组不是节点。
+      // 原来直接把数组丢给 appendChild 会抛 TypeError，整个面板渲染中断。
+      // 数字也当文本处理 —— 拼计数时很容易漏掉 String()。
+      (function add(list) {
+        (Array.isArray(list) ? list : [list]).forEach(function (c) {
+          if (c == null || c === false) return;
+          if (Array.isArray(c)) { add(c); return; }
+          n.appendChild(typeof c === "string" || typeof c === "number" ? document.createTextNode(String(c)) : c);
+        });
+      })(kids);
     }
     return n;
   }
@@ -101,7 +107,18 @@
   var CFG = Object.assign({}, DEF);
   // me 必须初始化成空串：undefined 会让 !DATA.me 之外的判断（如 === ""）失效
   // me / myId 必须初始化成空串：undefined 会让 === "" 之类的判断失效
-  var DATA = { me: "", myId: "", ids: {}, byAccount: {} };
+  var DATA = { me: "", myId: "", ids: {}, byAccount: {}, follow: newFollowState() };
+
+  // 关注追踪的数据形状。单独一个函数，loadAll 补缺字段和「清除数据」共用。
+  function newFollowState() {
+    return {
+      events: [],      // 关注/取关事件流水（含失败与撞限）
+      follows: {},     // 小写用户名 -> { ts, src, via, fb, fbAt, unfollowedAt }
+      following: {},   // 页面数据里读到的、你正在关注的人 -> { name, fb, seenAt }
+      keep: {},        // 未回关名单里的「保留」标记，这些人不催
+      consent: null    // { v, at } 数据说明的同意记录，没有它一个响应都不读
+    };
+  }
   var dirty = false;
 
   function acct() {
@@ -177,6 +194,15 @@
             if (typeof DATA.myId !== "string") { DATA.myId = ""; nz.changed = true; }
             if (!DATA.ids || typeof DATA.ids !== "object") { DATA.ids = {}; nz.changed = true; }
             if (!Array.isArray(DATA.sends)) { DATA.sends = []; nz.changed = true; }
+            // 关注追踪：老数据没这块，补上；已有但缺子字段的也补齐，别让 undefined 漏进计算
+            if (!DATA.follow || typeof DATA.follow !== "object") { DATA.follow = newFollowState(); nz.changed = true; }
+            else {
+              var fs0 = newFollowState();
+              Object.keys(fs0).forEach(function (k) {
+                if (DATA.follow[k] === undefined || DATA.follow[k] === null) { DATA.follow[k] = fs0[k]; nz.changed = true; }
+              });
+              if (!Array.isArray(DATA.follow.events)) { DATA.follow.events = []; nz.changed = true; }
+            }
             // 只有真的迁移过东西才回写。之前是无条件 dirty=true，
             // 等于每次打开页面都全量序列化写一遍，纯浪费。
             if (nz.changed) { dirty = true; flushSave(); }
@@ -726,7 +752,10 @@
     }
     if (!a.handles[h].out) a.handles[h].out = [];
     if (!a.handles[h].inn) a.handles[h].inn = [];
-    a.handles[h].ts = Date.now();      // LRU 依据
+    // 这里不刷新 ts。ts 是 evictOldestHandles 唯一的排序依据，而那个函数声称按
+    // 「最久没有新互动」淘汰 —— 被动扫描反复读到同一批数据也会走 slot()，
+    // 若在此无条件刷新，语义就变成「最久没被扫到」，会把有价值但最近没刷到的人先淘汰掉。
+    // 改由 recordOut/recordIn 在真的新增了 ID 时才刷新。
     return a.handles[h];
   }
 
@@ -773,8 +802,8 @@
   }
 
   // 原代码 mt = Math.max(mt, 1) 永远是 1，这里按推文 ID 去重累加
-  function recordOut(h, tid) { var sl = slot(h); var added = !!(sl && pushId(sl.out, tid)); if (added) markDirty(); return added; }
-  function recordIn(h, key) { var sl = slot(h); var added = !!(sl && pushId(sl.inn, key)); if (added) markDirty(); return added; }
+  function recordOut(h, tid) { var sl = slot(h); var added = !!(sl && pushId(sl.out, tid)); if (added) { sl.ts = Date.now(); markDirty(); } return added; }
+  function recordIn(h, key) { var sl = slot(h); var added = !!(sl && pushId(sl.inn, key)); if (added) { sl.ts = Date.now(); markDirty(); } return added; }
 
   function firstStatusId(root) {
     var links = root.querySelectorAll('a[href*="/status/"]');
@@ -1699,9 +1728,229 @@
       if (e.source !== window) return;
       if (e.origin && e.origin !== location.origin) return;
       var d = e.data;
-      if (!d || typeof d !== "object" || d.__xrh !== API_MARK || d.type !== "tweets") return;
-      try { ingestApiTweets(d.users, d.tweets, d.me, d.sample); } catch (err) {}
+      if (!d || typeof d !== "object" || d.__xrh !== API_MARK) return;
+      try {
+        if (d.type === "tweets") ingestApiTweets(d.users, d.tweets, d.me, d.sample);
+        // 注入脚本刚装好，来问一声当前是否已同意 —— 它可能比 content.js 先就绪
+        else if (d.type === "hello") pushFollowCtl();
+        else if (d.type === "followEvt") recordFollowEvent(d.event);
+        else if (d.type === "followRel") recordFollowRel(d.users);
+      } catch (err) {}
     });
+  }
+
+  // ==================== 关注追踪 ====================
+  // 算法移植自 mikuairai/follow-counter（MIT，Copyright (c) 2026 mikuairai）。
+  // 只记录、不代操作：这里不会替你关注或取关任何人，读的全是页面自己已经发出的请求。
+  var CTL_MARK = "__xrh_ctl__";
+  var followFilter = "all";
+  var followBadgeEl = null;
+  var followBadgeTimer = null;
+
+  function F() {
+    if (!DATA.follow || typeof DATA.follow !== "object") DATA.follow = newFollowState();
+    return DATA.follow;
+  }
+
+  // 双重门：总开关 + 数据说明的同意记录。任一不满足，注入层一个关注响应都不读。
+  function followEnabled() {
+    return !!CFG.followTrack && !!(X.FSTATS && X.FSTATS.hasConsent(F().consent));
+  }
+
+  function pushFollowCtl() {
+    try { window.postMessage({ __xrhCtl: CTL_MARK, on: followEnabled() }, location.origin); } catch (e) {}
+  }
+
+  function followStats() {
+    return X.FSTATS.compute(F().events, Date.now(), 0);
+  }
+  function followSettings() {
+    return { roundSize: Number(CFG.followRoundSize) || 0 };
+  }
+
+  function keyOf(name) {
+    var k = String(name || "").toLowerCase();
+    return /^[a-z0-9_]{1,15}$/.test(k) ? k : "";
+  }
+
+  // ---------- 记账：关注 / 取关事件 ----------
+  function recordFollowEvent(ev) {
+    // 纵深防御：注入层已按同意门控过滤，这里再挡一道，伪造消息进不来
+    if (!ev || !followEnabled()) return;
+    var f = F();
+    var now = ev.ts || Date.now();
+    var key = keyOf(ev.user);
+    var wasCooling = !!followStats().cooling;
+
+    if (ev.type === "follow" && ev.ok && key) {
+      var src = X.FSTATS.sourceOf(ev.path);
+      var prev = f.follows[key];
+      f.follows[key] = {
+        ts: now, src: src.cat, via: src.via,
+        // 之前已经知道回关状态的别丢，否则一次重新关注就把已知信息抹掉
+        fb: prev ? prev.fb : null, fbAt: prev ? prev.fbAt : null,
+        unfollowedAt: null
+      };
+      f.following[key] = { name: key, fb: prev ? prev.fb : null, seenAt: now };
+    }
+
+    if (ev.type === "unfollow" && ev.ok && key) {
+      var rec = f.follows[key];
+      // 持有了多久 = churn 判定的依据（X 禁止「关注后短期取关」涨粉）
+      if (rec && rec.ts) ev.heldMs = now - rec.ts;
+      if (rec) rec.unfollowedAt = now;
+      if (f.following[key]) delete f.following[key];
+    }
+
+    f.events.push(ev);
+    f.events = X.FSTATS.prune(f.events, now);
+    f.follows = X.FSTATS.pruneFollows(f.follows, now);
+    markDirty();
+
+    // 撞限：这一下最该提醒，因为它意味着再点就是白点
+    if (ev.limit) {
+      var st = followStats();
+      var w = st.lastLimitWindows || {};
+      toast("撞到关注限制了。撞限前 15 分钟内成功关注了 " + (w.m15 != null ? w.m15 : "?") +
+        " 个（1 小时 " + (w.h1 != null ? w.h1 : "?") + " 个）。先歇着，别再点了。" +
+        (ev.message ? "\nX 的原话：" + String(ev.message).slice(0, 120) : ""), "err", 9000);
+    } else if (ev.type === "follow" && ev.ok && wasCooling) {
+      var best = followStats().bestKnownCooldown;
+      if (best) toast("冷却结束，又能关注了。这次从最后一次成功关注算起等了 " + X.FSTATS.formatDuration(best), "ok", 6000);
+    }
+
+    // 快取关提醒
+    if (ev.type === "unfollow" && ev.ok && ev.heldMs != null && ev.heldMs < X.FSTATS.CONST.QUICK_UNFOLLOW_MS) {
+      var ch = X.FSTATS.churn(f.events, now);
+      if (ch.level !== "ok") {
+        toast("这次取关距关注只有 " + X.FSTATS.formatDuration(ev.heldMs) + "。X 明确禁止 follow churn" +
+          "（大量关注后取关涨粉），24 小时内已有 " + ch.quick24h + " 次这种快取关" +
+          (ch.level === "high" ? "，数量已经偏多，建议今天到此为止" : "") + "。", "err", 9000);
+      }
+    }
+
+    updateFollowBadge();
+    if (panelOpen && tabState === "follow") renderPanel();
+  }
+
+  // ---------- 记账：从页面自己的响应里读回关关系 ----------
+  function recordFollowRel(users) {
+    if (!Array.isArray(users) || !users.length || !followEnabled()) return;
+    var f = F();
+    var now = Date.now();
+    var changed = false;
+    var MAX_FOLLOWING = 5000;
+
+    for (var i = 0; i < users.length; i++) {
+      var u = users[i];
+      var key = keyOf(u.name);
+      if (!key || key === DATA.me) continue;
+
+      // following：你正在关注的人。f 为 false 是明确的「没关注」，可以从名单里摘掉
+      if (u.f === true) {
+        var cur = f.following[key];
+        if (!cur || cur.fb !== u.fb) { f.following[key] = { name: key, fb: u.fb === true, seenAt: now }; changed = true; }
+        else if (now - (cur.seenAt || 0) > 60000) { cur.seenAt = now; }
+      } else if (u.f === false && f.following[key]) {
+        delete f.following[key];
+        changed = true;
+      }
+
+      // 回关状态回填到自己记录过的关注上。
+      // 这里不排除已取关的记录：fb 表示「对方关不关注你」，跟你有没有关注 TA 无关，
+      // 是独立的事实。而且重新关注同一个人时 recordFollowEvent 会沿用 prev.fb ——
+      // 若在此跳过，「关注→取关→再关注」就会把本来已知的回关状态抹成未知。
+      var tr = f.follows[key];
+      if (tr && tr.fb !== (u.fb === true)) {
+        tr.fb = u.fb === true;
+        if (tr.fb) tr.fbAt = now;
+        changed = true;
+      }
+    }
+
+    // 上限保护：按最近看到的时间留最新的
+    var ks = Object.keys(f.following);
+    if (ks.length > MAX_FOLLOWING) {
+      ks.sort(function (a, b) { return (f.following[a].seenAt || 0) - (f.following[b].seenAt || 0); })
+        .slice(0, ks.length - MAX_FOLLOWING)
+        .forEach(function (k) { delete f.following[k]; });
+      changed = true;
+    }
+
+    if (changed) {
+      markDirty();
+      updateFollowBadge();
+      if (panelOpen && tabState === "follow") renderPanel();
+    }
+  }
+
+  // ---------- 同意 ----------
+  function grantFollowConsent() {
+    F().consent = { v: X.FSTATS.CONSENT_VERSION, at: Date.now() };
+    markDirty();
+    pushFollowCtl();
+    toast("已开始记录关注/取关。数据只存在这台电脑的浏览器里。", "ok", 5000);
+    renderPanel();
+  }
+
+  function revokeFollowConsent() {
+    F().consent = null;
+    pushFollowCtl();     // 立刻让注入层停手，在途读取也会因 generation 变化作废
+    markDirty();
+    renderPanel();
+  }
+
+  function clearFollowData() {
+    var c = F().consent;
+    DATA.follow = newFollowState();
+    DATA.follow.consent = c;   // 清数据不等于撤回同意，两件事分开
+    markDirty();
+    updateFollowBadge();
+    renderPanel();
+  }
+
+  // ---------- 悬浮计数角标（默认关）----------
+  function updateFollowBadge() {
+    var want = !!CFG.followShowBadge && followEnabled();
+    if (!want) { if (followBadgeEl) { followBadgeEl.remove(); followBadgeEl = null; } return; }
+    var st = followStats();
+    var b = X.FSTATS.iconBadge(st, followSettings());
+    var ph = X.FSTATS.phase(st, followSettings());
+    if (!host) return;
+    if (!followBadgeEl) {
+      followBadgeEl = el("div", { cls: "fbadge", attrs: { role: "status", "aria-live": "polite" } });
+      followBadgeEl.addEventListener("click", function () { openPanel("follow"); });
+      host.appendChild(followBadgeEl);
+    }
+    followBadgeEl.style.background = b.color;
+    followBadgeEl.textContent = b.text || "0";
+    followBadgeEl.title = phaseTitle(ph, st);
+  }
+
+  function phaseTitle(ph, st) {
+    var FS = X.FSTATS;
+    var head = "本轮已关注 " + ph.done + " / " + ph.size + "（额度来源：" + ph.from + "）";
+    if (ph.name === "cooling") {
+      return head + "\n撞限冷却中，已等 " + FS.formatDuration(st.cooling.elapsed) +
+        (st.bestKnownCooldown ? "\n上次等 " + FS.formatDuration(st.bestKnownCooldown) + " 后恢复" : "\n还没有可参考的恢复时长") +
+        "\n点击查看详情";
+    }
+    if (ph.name === "ready") return head + "\n等够了，可以再关注一批\n点击查看详情";
+    if (ph.name === "full") return head + "\n本轮额度用完，歇一会儿再关注\n点击查看详情";
+    if (ph.name === "near") return head + "\n快到额度了，注意节奏\n点击查看详情";
+    if (st.rest && st.rest.elapsed > 0) return head + "\n距上次关注 " + FS.formatDuration(st.rest.elapsed) + "，满 " + FS.formatDuration(st.rest.reset) + " 开新一轮\n点击查看详情";
+    return head + "\n点击查看详情";
+  }
+
+  function startFollowBadgeTimer() {
+    if (followBadgeTimer) clearInterval(followBadgeTimer);
+    // 冷却/休息是按时间推进的，不刷新角标就会停在旧数字上
+    followBadgeTimer = setInterval(function () {
+      if (!followEnabled()) { if (followBadgeEl) { followBadgeEl.remove(); followBadgeEl = null; } return; }
+      if (CFG.followShowBadge) updateFollowBadge();
+      else if (followBadgeEl) { followBadgeEl.remove(); followBadgeEl = null; }
+      if (panelOpen && tabState === "follow") renderPanel();
+    }, 30000);
   }
 
   // ==================== 徽章 ====================
@@ -2393,6 +2642,31 @@
     ".row .p{flex:1;height:5px;background:#2f3336;border-radius:3px;overflow:hidden}",
     ".row .p i{display:block;height:100%;border-radius:3px}",
     ".row .n{font-size:11px;color:#71767b;width:44px;text-align:right}",
+    // —— 关注页 ——
+    ".fcount{background:#1d1f23;border:1px solid #2f3336;border-radius:12px;padding:12px;margin-bottom:10px}",
+    ".fcount .n{font-size:30px;font-weight:800;line-height:1.05}",
+    ".fcount .s{font-size:12px;color:#a8b3bd;margin-top:2px}",
+    ".fcount .m{font-size:10.5px;color:#71767b;margin-top:7px;line-height:1.5}",
+    ".pbar{height:6px;background:#2f3336;border-radius:3px;overflow:hidden;margin-top:9px}",
+    ".pbar i{display:block;height:100%;border-radius:3px;transition:width .3s}",
+    ".d .h{display:flex;align-items:center;gap:6px;margin-bottom:3px}",
+    ".d .h .lnk{font-weight:700;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+    ".tag{background:#2f3336;color:#a8b3bd;border-radius:8px;padding:1px 6px;font-size:10px;font-weight:700;white-space:nowrap}",
+    ".tag.warn{background:rgba(255,173,31,.16);color:#ffad1f}",
+    ".chips{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:9px}",
+    ".chip{padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;background:#1d1f23;color:#71767b;border:1px solid #2f3336}",
+    ".chip:hover{color:#e7e9ea;border-color:#3d4347}",
+    ".chip.on{background:rgba(29,155,240,.16);color:#1d9bf0;border-color:rgba(29,155,240,.4)}",
+    ".fld{display:flex;align-items:center;gap:7px;flex-wrap:wrap}",
+    ".fld .lb{font-size:12px;font-weight:700;color:#e7e9ea}",
+    ".fld .num{width:66px;padding:4px 7px;border-radius:8px;background:#0f1419;border:1px solid #2f3336;color:#e7e9ea;font-size:12px}",
+    ".fld .num:focus{outline:none;border-color:#1d9bf0}",
+    ".ckrow{cursor:pointer;margin-bottom:2px}",
+    ".ckrow .ck{width:15px;height:15px;accent-color:#1d9bf0;cursor:pointer;flex:none}",
+    ".fbadge{position:fixed;left:18px;bottom:18px;min-width:38px;height:38px;padding:0 9px;border-radius:19px;",
+    "display:flex;align-items:center;justify-content:center;color:#fff;font:800 14px/1 system-ui;cursor:pointer;",
+    "pointer-events:auto;box-shadow:0 4px 16px rgba(0,0,0,.5);border:2px solid #0f1419;z-index:2;user-select:none}",
+    ".fbadge:hover{transform:scale(1.06)}",
     ".hint{font-size:11px;color:#71767b;line-height:1.6;margin-top:8px}",
     ".hint code{background:#2f3336;padding:1px 4px;border-radius:3px;color:#a8b3bd}",
     ".lnk{color:#1d9bf0;text-decoration:none}.lnk:hover{text-decoration:underline}",
@@ -2498,6 +2772,7 @@
     var tabs = el("div", { cls: "tabs", attrs: { role: "tablist" } }, [
       el("button", { cls: "tab on", text: "草稿箱", attrs: { "data-tab": "drafts", role: "tab", "aria-selected": "true" } }),
       el("button", { cls: "tab", text: "互动数据", attrs: { "data-tab": "stats", role: "tab", "aria-selected": "false" } }),
+      el("button", { cls: "tab", text: "关注", attrs: { "data-tab": "follow", role: "tab", "aria-selected": "false" } }),
       el("button", { cls: "tab", text: "诊断", attrs: { "data-tab": "diag", role: "tab", "aria-selected": "false" } })
     ]);
     tabs.addEventListener("click", function (e) {
@@ -3380,6 +3655,346 @@
       "）\n  追踪对象 = " + h + " 人";
   }
 
+  // ==================== 关注页 ====================
+  var PHASE_COLOR = { idle: "#71767b", going: "#1d9bf0", near: "#ffad1f", full: "#00ba7c", cooling: "#f4212e", ready: "#00ba7c" };
+  var PHASE_TEXT = {
+    idle: "本轮还没开始关注",
+    going: "可以继续关注",
+    near: "快到额度了，注意节奏",
+    full: "本轮额度用完，歇一会儿",
+    cooling: "撞限冷却中，别再点了",
+    ready: "等够了，可以再关注一批"
+  };
+
+  function renderFollowConsent() {
+    var FS = X.FSTATS;
+    panelBody.appendChild(el("div", { cls: "ctx" }, [
+      el("div", { cls: "who", text: "关注追踪：开始记录前请先看一眼" }),
+      el("div", { cls: "src", style: "-webkit-line-clamp:unset", text: "同意后插件会读取页面自己已经发出的关注/取关请求结果，" +
+        "并从 X 本来就会加载的用户资料里读出「你关注的人有没有关注你」。" })
+    ]));
+
+    panelBody.appendChild(el("div", { cls: "d" }, [
+      el("div", { cls: "txt", text: "会记录什么" }),
+      el("div", { cls: "hint", style: "margin-top:6px", text:
+        "· 关注/取关的结果、时间、当时所在的页面路径（用来算「从哪关注最容易换来回关」）\n" +
+        "· 对方的用户名，以及对方有没有关注你\n" +
+        "· 撞限的那一下：状态码、X 给的错误文案、之前各时间窗口关注了多少个" })
+    ]));
+
+    panelBody.appendChild(el("div", { cls: "d" }, [
+      el("div", { cls: "txt", text: "不会做什么" }),
+      el("div", { cls: "hint", style: "margin-top:6px", text:
+        "· 不替你关注、取关、发任何请求 —— 只旁观页面自己发的\n" +
+        "· 不上传任何数据。全部只存在这台电脑的 chrome.storage.local 里\n" +
+        "· 不读取凭据、Cookie、私信内容" })
+    ]));
+
+    panelBody.appendChild(el("div", { cls: "hint", text:
+      "同意之前，注入脚本一个关注类响应都不读（不是「读了不存」，是根本不读）。" +
+      "撤回同意后立刻停手，在途的读取也会作废。数据说明有实质变化时会要求你重新同意一次。" }));
+
+    panelBody.appendChild(el("button", { cls: "gen", text: "同意并开始记录", on: { click: grantFollowConsent } }));
+    if (!CFG.followTrack) {
+      panelBody.appendChild(el("div", { cls: "hint", style: "color:#ffad1f", text:
+        "注意：插件设置里的「关注追踪」总开关现在是关的，光同意不会开始记录。" }));
+    }
+  }
+
+  function renderFollow() {
+    panelBody.textContent = "";
+    var FS = X.FSTATS;
+    var f = F();
+    if (!FS.hasConsent(f.consent)) { renderFollowConsent(); return; }
+
+    var now = Date.now();
+    var set = followSettings();
+    var st = FS.compute(f.events, now, 0);
+    var ph = FS.phase(st, set);
+    var color = PHASE_COLOR[ph.name] || "#1d9bf0";
+
+    // ---- 1. 本轮计数 ----
+    var pct = Math.min(100, Math.round(ph.done / Math.max(1, ph.size) * 100));
+    panelBody.appendChild(el("div", { cls: "fcount", style: "border-color:" + color + "55" }, [
+      el("div", { cls: "n", style: "color:" + color, text: ph.done + " / " + ph.size }),
+      el("div", { cls: "s", text: PHASE_TEXT[ph.name] || "" }),
+      el("div", { cls: "pbar" }, [el("i", { style: "width:" + pct + "%;background:" + color })]),
+      el("div", { cls: "m", text: "额度来源：" + ph.from + (ph.from === "默认" ? "（X 没公布这个数字，可在下面改成你自己的经验值）" : "") })
+    ]));
+
+    // ---- 2. 冷却 / 休息进度 ----
+    if (st.cooling) {
+      var ref = st.bestKnownCooldown;
+      var left = ref ? Math.max(0, ref - st.cooling.elapsed) : null;
+      panelBody.appendChild(el("div", { cls: "d", style: "border-color:rgba(244,33,46,.45)" }, [
+        el("div", { cls: "txt", style: "color:#f4212e;font-weight:700", text: "撞限冷却中" }),
+        el("div", { cls: "hint", style: "margin-top:5px", text:
+          "从本轮最后一次成功关注算起，已经等了 " + FS.formatDuration(st.cooling.elapsed) + "\n" +
+          "撞限后又试了 " + st.cooling.retries + " 次，每次都失败（每试一次都可能把冷却重新拉长）\n" +
+          (ref ? "参考：上次等满 " + FS.formatDuration(ref) + " 后就恢复了，还需约 " + FS.formatDuration(left)
+               : "还没有可参考的恢复时长 —— 这次恢复之后就能算出来") })
+      ]));
+    } else if (st.rest) {
+      var rp = Math.min(100, Math.round(st.rest.elapsed / Math.max(1, st.rest.reset) * 100));
+      panelBody.appendChild(el("div", { cls: "d" }, [
+        el("div", { cls: "txt", text: st.rest.rested ? "已经歇够，可以开新一轮" : "休息中，没撞限" }),
+        el("div", { cls: "hint", style: "margin-top:5px", text: "距上次成功关注 " + FS.formatDuration(st.rest.elapsed) + "，满 " + FS.formatDuration(st.rest.reset) + " 算新一轮" }),
+        el("div", { cls: "pbar" }, [el("i", { style: "width:" + rp + "%;background:#1d9bf0" })])
+      ]));
+    }
+
+    // ---- 3. 各窗口计数 ----
+    var card = function (k, v, unit) {
+      return el("div", { cls: "card" }, [
+        el("div", { cls: "k", text: k }),
+        el("div", { cls: "v" }, [String(v), unit ? el("small", { text: " " + unit }) : null])
+      ]);
+    };
+    panelBody.appendChild(el("div", { cls: "sec" }, ["各时间窗口"]));
+    panelBody.appendChild(el("div", { cls: "st" }, [
+      card("15 分钟关注", st.follow15m, "个"),
+      card("1 小时关注", st.follow1h, "个"),
+      card("24 小时关注", st.follow24h, "个"),
+      card("24 小时取关", st.unfollow24h, "个")
+    ]));
+
+    // ---- 4. 学到的账号规律 ----
+    var rh = FS.rhythm(st);
+    panelBody.appendChild(el("div", { cls: "sec" }, ["你这个账号的规律"]));
+    if (!rh) {
+      panelBody.appendChild(el("div", { cls: "hint", text: "还没撞过限，所以没有可总结的规律。撞过几次之后，这里会给出你账号自己的每轮个数和该等多久 —— 比任何通用建议都准。" }));
+    } else {
+      panelBody.appendChild(el("div", { cls: "d" }, [
+        el("div", { cls: "hint", style: "margin-top:0", text:
+          "撞限 " + rh.count + " 轮\n" +
+          (rh.typical != null ? "撞限前那一轮通常关注了 " + rh.typical + " 个\n" : "") +
+          (rh.waitMin != null ? "等过 " + FS.formatDuration(rh.waitMin) + " 仍然不够（这是下限）\n" : "") +
+          (rh.waitMax != null ? "等到 " + FS.formatDuration(rh.waitMax) + " 就能再关注（这是上限）" : "") })
+      ]));
+      if (st.limitHits && st.limitHits.length) {
+        panelBody.appendChild(el("details", { cls: "hist" }, [
+          el("summary", {}, [el("div", { cls: "h" }, [
+            el("span", { cls: "a", text: "最近 " + st.limitHits.length + " 次撞限" }),
+            el("span", { cls: "c", text: "详情" })
+          ])]),
+          el("div", { cls: "inner" }, st.limitHits.map(function (x) {
+            var w = x.windows || {};
+            return el("div", { cls: "hint", style: "margin:0 0 7px", text:
+              new Date(x.start).toLocaleString() + "\n" +
+              "撞限前：15分 " + w.m15 + " / 30分 " + w.m30 + " / 1小时 " + w.h1 + " / 24小时 " + w.h24 + "\n" +
+              "那一轮关注了 " + x.batch + " 个，重试 " + x.retries + " 次" +
+              (x.end != null ? "，等 " + FS.formatDuration(x.cooldownMax) + " 后恢复" : "，仍在冷却") +
+              (x.event && x.event.message ? "\nX 的原话：" + String(x.event.message).slice(0, 100) : "") });
+          }))
+        ]));
+      }
+    }
+
+    // ---- 5. churn 护栏 ----
+    var ch = FS.churn(f.events, now);
+    if (ch.level !== "ok") {
+      panelBody.appendChild(el("div", { cls: "d", style: "border-color:" + (ch.level === "high" ? "rgba(244,33,46,.5)" : "rgba(255,173,31,.5)") }, [
+        el("div", { cls: "txt", style: "color:" + (ch.level === "high" ? "#f4212e" : "#ffad1f") + ";font-weight:700",
+          text: ch.level === "high" ? "取关节奏偏快，建议今天收手" : "注意取关节奏" }),
+        el("div", { cls: "hint", style: "margin-top:5px", text:
+          "24 小时内取关 " + ch.unfollow24h + " 个，其中 " + ch.quick24h + " 个是关注后 72 小时内就取关的。\n" +
+          "X 明确禁止 follow churn（大量关注后取关涨粉），可能被限制、过滤甚至关停账号。" })
+      ]));
+    }
+
+    // ---- 6. 回关统计 ----
+    var fb = FS.followBack(f.follows, now);
+    panelBody.appendChild(el("div", { cls: "sec" }, ["回关情况", el("span", { cls: "sp" })]));
+    if (!fb.tracked) {
+      panelBody.appendChild(el("div", { cls: "hint", text: "还没记录到关注。开始正常用 X 关注人之后，这里会统计回关率，并按「从哪个页面关注的」分档 —— 用来找出对你来说最容易换来回关的入口。" }));
+    } else {
+      panelBody.appendChild(el("div", { cls: "st" }, [
+        card("记录的关注", fb.tracked, "个"),
+        card("已回关", fb.yes, "个"),
+        card("回关率", fb.rate != null ? Math.round(fb.rate * 100) + "%" : "—", ""),
+        card("状态未知", fb.pending, "个")
+      ]));
+      if (fb.byCat && fb.byCat.length) {
+        panelBody.appendChild(el("div", { cls: "d" }, [
+          el("div", { cls: "txt", text: "按关注入口分档" }),
+          fb.byCat.map(function (r) {
+            var p = r.known ? Math.round(r.rate * 100) : 0;
+            return el("div", { cls: "row" }, [
+              el("span", { cls: "a", text: r.label }),
+              el("span", { cls: "p" }, [el("i", { style: "width:" + p + "%;background:#1d9bf0" })]),
+              el("span", { cls: "n", text: r.known ? (p + "%/" + r.known) : ("?/" + r.n) })
+            ]);
+          }),
+          el("div", { cls: "hint", text: "分母是「已知回关状态」的个数。状态未知的不算进回关率，免得把刚关注的人当成不回关。" })
+        ]));
+      }
+      if (fb.byVia && fb.byVia.length) {
+        panelBody.appendChild(el("details", { cls: "hist" }, [
+          el("summary", {}, [el("div", { cls: "h" }, [
+            el("span", { cls: "a", text: "回关率最高的具体来源" }),
+            el("span", { cls: "c", text: fb.byVia.length + " 个" })
+          ])]),
+          el("div", { cls: "inner" }, fb.byVia.map(function (r) {
+            return el("div", { cls: "row" }, [
+              el("span", { cls: "a", text: "@" + r.via }),
+              el("span", { cls: "p" }, [el("i", { style: "width:" + Math.round((r.rate || 0) * 100) + "%;background:#00ba7c" })]),
+              el("span", { cls: "n", text: Math.round((r.rate || 0) * 100) + "%/" + r.known })
+            ]);
+          }))
+        ]));
+      }
+    }
+
+    // ---- 7. 未回关名单 ----
+    var rows = FS.nonFollowers(f.following, f.follows, now, f.keep);
+    var D7 = 7 * 24 * 60 * 60 * 1000, D3 = 3 * 24 * 60 * 60 * 1000;
+    var filtered = rows.filter(function (r) {
+      if (followFilter === "old") return r.age == null || r.age >= D7;
+      if (followFilter === "fresh") return r.age != null && r.age < D3;
+      if (followFilter === "unknown") return r.fb == null;
+      if (followFilter === "kept") return r.keep;
+      return true;
+    });
+    var shown = followFilter === "kept" ? filtered : filtered.filter(function (r) { return !r.keep; });
+
+    panelBody.appendChild(el("div", { cls: "sec" }, [
+      "未回关名单", el("span", { cls: "n", text: String(shown.length) }), el("span", { cls: "sp" }),
+      el("button", { cls: "b ico", text: "复制", title: "复制这批用户名（每行一个，带 @）", on: {
+        click: function () {
+          var txt = shown.map(function (r) { return "@" + r.key; }).join("\n");
+          if (!txt) { toast("这个筛选下没有人", "", 2500); return; }
+          copyText(txt).then(function (ok) { toast(ok ? ("已复制 " + shown.length + " 个用户名") : "复制失败，浏览器拒绝了剪贴板", ok ? "ok" : "err", 3000); });
+        }
+      } })
+    ]));
+
+    var chips = [["all", "全部"], ["old", "超 7 天"], ["fresh", "3 天内"], ["unknown", "状态未知"], ["kept", "已保留"]];
+    panelBody.appendChild(el("div", { cls: "chips" }, chips.map(function (c) {
+      return el("button", {
+        cls: "chip" + (followFilter === c[0] ? " on" : ""), text: c[1],
+        on: { click: function () { followFilter = c[0]; renderPanel(); } }
+      });
+    })));
+
+    if (!rows.length) {
+      panelBody.appendChild(el("div", { cls: "hint", text: "名单是空的。这里的判定来自 X 自己返回的关注关系字段，需要你在页面上刷到过对方（打开 TA 的主页、或在关注/粉丝列表里滚到 TA）才会知道状态。" }));
+    } else if (!shown.length) {
+      panelBody.appendChild(el("div", { cls: "empty", text: "这个筛选下没有人" }));
+    } else {
+      shown.slice(0, 200).forEach(function (r) {
+        var ageTxt = r.age != null ? "关注 " + FS.formatDuration(r.age) + "前" : "插件装上前就关注了";
+        var srcTxt = r.src ? (FS.SOURCE_LABELS[r.src] || r.src) + (r.via ? " · @" + r.via : "") : "";
+        panelBody.appendChild(el("div", { cls: "d" }, [
+          el("div", { cls: "h" }, [
+            el("a", { cls: "lnk", text: "@" + r.key, attrs: { href: "https://x.com/" + r.key, target: "_blank", rel: "noreferrer" } }),
+            el("span", { cls: "sp" }),
+            r.fb === false ? el("span", { cls: "tag warn", text: "没回关" }) : el("span", { cls: "tag", text: "状态未知" })
+          ]),
+          el("div", { cls: "meta", text: ageTxt + (r.fresh ? " · 还在 72 小时内，先别急着取关" : "") + (srcTxt ? "\n来源：" + srcTxt : "") }),
+          el("div", { cls: "bar" }, [
+            el("button", { cls: "b", text: r.keep ? "取消保留" : "保留", title: "保留的人不会出现在催办名单里", on: {
+              click: function () {
+                if (r.keep) delete f.keep[r.key]; else f.keep[r.key] = true;
+                markDirty(); renderPanel();
+              }
+            } }),
+            el("button", { cls: "b ico", text: "复制", on: {
+              click: function () { copyText("@" + r.key).then(function (ok) { toast(ok ? "已复制 @" + r.key : "复制失败", ok ? "ok" : "err", 2200); }); }
+            } })
+          ])
+        ]));
+      });
+      if (shown.length > 200) {
+        panelBody.appendChild(el("div", { cls: "hint", text: "只显示前 200 个（共 " + shown.length + " 个）。用上面的筛选缩小范围，或点「复制」拿全部。" }));
+      }
+    }
+
+    // ---- 8. X 官方限制 ----
+    var L = X.X_LIMITS;
+    panelBody.appendChild(el("details", { cls: "hist" }, [
+      el("summary", {}, [el("div", { cls: "h" }, [
+        el("span", { cls: "a", text: "X 官方公布的限制" }),
+        el("span", { cls: "c", text: (L.checkedAt || "") + " 存档" })
+      ])]),
+      el("div", { cls: "inner" }, [
+        el("div", { cls: "st" }, L.tiles.map(function (t) {
+          return el("div", { cls: "card" }, [
+            el("div", { cls: "k", text: t.label, title: t.note }),
+            el("div", { cls: "v" }, [t.value, el("small", { text: " " + t.unit })])
+          ]);
+        })),
+        el("div", { cls: "hint", text: L.notes.map(function (n) { return "· " + n; }).join("\n") }),
+        el("div", { cls: "hint" }, [
+          "来源：", el("a", { cls: "lnk", text: "X Limits", attrs: { href: L.source, target: "_blank", rel: "noreferrer" } }),
+          " · ", el("a", { cls: "lnk", text: "关注上限", attrs: { href: L.followSource, target: "_blank", rel: "noreferrer" } })
+        ])
+      ])
+    ]));
+
+    // ---- 9. 设置与数据 ----
+    panelBody.appendChild(el("div", { cls: "sec" }, ["设置"]));
+    var rsInput = el("input", {
+      cls: "num", attrs: { type: "number", min: "0", max: "400", step: "1", value: String(set.roundSize || 0) },
+      title: "0 = 用默认 15"
+    });
+    panelBody.appendChild(el("div", { cls: "d" }, [
+      el("div", { cls: "fld" }, [
+        el("span", { cls: "lb", text: "每轮关注额度" }),
+        rsInput,
+        el("button", { cls: "b", text: "保存", on: {
+          click: function () {
+            var v = Math.max(0, Math.min(400, parseInt(rsInput.value, 10) || 0));
+            CFG.followRoundSize = v;
+            saveCfgField("followRoundSize", v);
+            toast(v ? ("每轮额度改成 " + v + " 个") : "已改回默认 15 个", "ok", 2500);
+            renderPanel();
+          }
+        } })
+      ]),
+      el("div", { cls: "hint", text: "X 没公布「一轮能关注几个」，15 是经验默认值。撞过限之后照着上面「你这个账号的规律」改成自己的数更准。" })
+    ]));
+
+    panelBody.appendChild(el("div", { cls: "d" }, [
+      toggleRow("悬浮计数角标", "页面左下角常驻显示本轮已关注几个，撞限时变红。默认关。", "followShowBadge", function () { updateFollowBadge(); }),
+      el("div", { cls: "hint", text: "记录到的数据：" + f.events.length + " 条事件 / " + Object.keys(f.follows).length + " 个关注 / " + Object.keys(f.following).length + " 个已知关系。全部只存在这台电脑上。" })
+    ]));
+
+    panelBody.appendChild(el("div", { cls: "d" }, [
+      el("div", { cls: "bar" }, [
+        el("button", { cls: "b danger", text: "清除关注数据", title: "删掉事件、关注记录、关系和保留名单，但不撤回同意", on: {
+          click: function () { if (confirm("清除全部关注追踪数据？这不会撤回同意，之后仍会继续记录。")) clearFollowData(); }
+        } }),
+        el("button", { cls: "b danger", text: "撤回同意并停止", title: "停止读取任何关注类响应，已有数据保留", on: {
+          click: function () { if (confirm("撤回同意？注入脚本会立刻停止读取关注类响应，已记录的数据保留（想删请点「清除关注数据」）。")) revokeFollowConsent(); }
+        } })
+      ])
+    ]));
+  }
+
+  // 面板里的开关行：改 CFG 并立刻持久化那一个字段
+  function toggleRow(label, hint, field, after) {
+    var box = el("input", { cls: "ck", attrs: { type: "checkbox" } });
+    box.checked = !!CFG[field];
+    box.addEventListener("change", function () {
+      CFG[field] = box.checked;
+      saveCfgField(field, box.checked);
+      if (after) after();
+    });
+    return el("label", { cls: "fld ckrow" }, [box, el("span", { cls: "lb", text: label }), hint ? el("span", { cls: "hint", style: "margin:0;flex-basis:100%", text: hint }) : null]);
+  }
+
+  // 只写一个字段：先读回来再合并，避免把 popup 刚改的其它设置覆盖掉
+  function saveCfgField(k, v) {
+    try {
+      chrome.storage.local.get([CFG_KEY], function (r) {
+        var c = Object.assign({}, (r && r[CFG_KEY]) || {});
+        c[k] = v;
+        var o = {}; o[CFG_KEY] = c;
+        chrome.storage.local.set(o);
+      });
+    } catch (e) {}
+  }
+
   function syncTabs() {
     if (!panel) return;
     $$(".tab", panel).forEach(function (t) {
@@ -3392,6 +4007,7 @@
   function renderPanel() {
     if (!panelBody) return;
     if (tabState === "stats") renderStats();
+    else if (tabState === "follow") renderFollow();
     else if (tabState === "diag") { lastScan = null; renderDiag(); }
     else renderDrafts();
     updateFabDot();
@@ -3502,6 +4118,9 @@
     if (!CFG.showAiBtn) $$(".xrh-ai-btn").forEach(function (n) { n.remove(); });
     if (!CFG.trackInteractions) $$(".xrh-badge").forEach(function (n) { n.remove(); });
     if (!CFG.highlightFollow) $$(".xrh-tag").forEach(function (n) { n.remove(); });
+    // popup 里关掉总开关要立刻让注入层停手，不能等页面刷新
+    pushFollowCtl();
+    updateFollowBadge();
     renderPanel();
     positionUI();
   }
@@ -3512,6 +4131,8 @@
     mountUI();
     patchHistory();
     bindApiBridge();     // 接收 intercept.js 从 X 自身接口响应里提取的回复关系
+    pushFollowCtl();     // 告知注入层关注追踪是否已获同意（未同意则一个响应都不读）
+    startFollowBadgeTimer();
     mo.observe(document.body, { childList: true, subtree: true, characterData: true });
     process(document.body);
     routeChanged();

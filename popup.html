@@ -228,10 +228,12 @@
     <label class="tg"><input type="checkbox" id="translateUI"><span>界面汉化</span></label>
     <label class="tg"><input type="checkbox" id="highlightFollow"><span>未回关高亮</span></label>
     <label class="tg"><input type="checkbox" id="trackInteractions"><span>互动追踪</span></label>
+    <label class="tg"><input type="checkbox" id="followTrack"><span>关注追踪</span></label>
+    <label class="tg"><input type="checkbox" id="followShowBadge"><span>关注计数角标</span></label>
     <label class="tg"><input type="checkbox" id="disableThinking"><span>关闭思考模式</span></label>
     <label class="tg"><input type="checkbox" id="useVision"><span>配图时自动看图</span></label>
   </div>
-  <div class="hint" style="margin-top:8px">「进帖自动生成」会在你每打开一条帖子时静默消耗一次 API 额度，按需开启。<br>「关闭思考模式」对 qwen3.x 系列效果极大：实测延迟从 7-50 秒降到 1-2 秒、token 省约 75%。不支持该参数的服务商（如 glm）会自动回退重试，不影响使用。</div>
+  <div class="hint" style="margin-top:8px">「进帖自动生成」会在你每打开一条帖子时静默消耗一次 API 额度，按需开启。<br>「关注追踪」记录你自己的关注/取关与回关情况，用来防撞限、算冷却、列未回关名单。它还需要在面板「关注」页同意一次数据说明才会真正开始读 —— 未同意前一个关注类响应都不读。只记录不代操作，不会替你关注或取关任何人。<br>「关闭思考模式」对 qwen3.x 系列效果极大：实测延迟从 7-50 秒降到 1-2 秒、token 省约 75%。不支持该参数的服务商（如 glm）会自动回退重试，不影响使用。</div>
 </section>
 
 <section>

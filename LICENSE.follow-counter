@@ -1,0 +1,35 @@
+MIT License
+
+Copyright (c) 2026 mikuairai
+
+本文件对应的代码来自 https://github.com/mikuairai/follow-counter
+（Chrome 扩展「关注计数器 · 防撞限 · 查回关」）。
+
+「我爱说人话」的以下部分移植/改编自该仓库：
+
+  · follow-stats.js  —— 移植自其 extension/stats.js（关注计数、撞限冷却自学习、
+                        回关率分档、未回关名单、follow churn 护栏的纯函数算法）
+  · intercept.js     —— 其 extension/inject.js 中的关注/取关端点识别、撞限判定、
+                        关系扫描与同意门控机制，合并进本扩展已有的注入脚本
+  · defaults.js      —— 其 extension/limits.js 中的 X 官方限制数据（X_LIMITS）
+
+原作其余部分（popup、list 页、welcome 页、sound、主题等）未被采用。
+本扩展的其余代码不属于该仓库，另行授权。
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
