@@ -1,0 +1,49 @@
+# ===== 密钥与凭据：任何情况下都不能提交 =====
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+secrets.*
+credentials*
+*token*
+*apikey*
+*api_key*
+*secret*
+
+# ===== 本地数据 / 导出文件 =====
+# 「设置 → 本地数据 → 导出」生成的文件含互动数据与草稿，属于个人隐私
+x-reply-helper-*.json
+*-export.json
+export-*.json
+backup-*.json
+
+# ===== 抓包与调试产物 =====
+*.har
+*.log
+logs/
+dump/
+tmp/
+temp/
+scratch/
+
+# ===== 依赖与构建产物 =====
+node_modules/
+dist/
+build/
+out/
+*.zip
+*.crx
+*.tgz
+
+# ===== 编辑器 / 系统 =====
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*~

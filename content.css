@@ -1,0 +1,79 @@
+/* 我爱说人话 — 注入到 x.com 页面 DOM 的样式（徽章/标签/AI 按钮）
+   面板与 Toast 走 Shadow DOM，样式在 content.js 内，互不干扰。
+   所有类名以 xrh- 前缀，属性带 !important 以压过 X 自身的 CSS。 */
+
+.xrh-root {
+  all: initial;
+  position: fixed !important;
+  z-index: 2147483000 !important;
+}
+
+/* ---------- 互动徽章 ---------- */
+.xrh-badge {
+  display: inline-flex !important;
+  align-items: center !important;
+  margin-left: 5px !important;
+  padding: 0 5px !important;
+  height: 16px !important;
+  border-radius: 8px !important;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif !important;
+  font-size: 10px !important;
+  line-height: 16px !important;
+  font-weight: 700 !important;
+  color: #fff !important;
+  cursor: help !important;
+  vertical-align: middle !important;
+  white-space: nowrap !important;
+  letter-spacing: 0 !important;
+  background: #2f3336 !important;
+}
+.xrh-badge[data-state="none"]   { background: #3a3f43 !important; color: #8b98a5 !important; }
+.xrh-badge[data-state="mutual"] { background: #16a34a !important; }
+.xrh-badge[data-state="out"]    { background: #2563eb !important; }
+.xrh-badge[data-state="in"]     { background: #d97706 !important; }
+
+/* ---------- 关注关系标签 ---------- */
+.xrh-tag {
+  display: inline-flex !important;
+  align-items: center !important;
+  margin-left: 5px !important;
+  padding: 0 5px !important;
+  height: 16px !important;
+  border-radius: 4px !important;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif !important;
+  font-size: 10px !important;
+  line-height: 16px !important;
+  font-weight: 700 !important;
+  color: #fff !important;
+  vertical-align: middle !important;
+  white-space: nowrap !important;
+  cursor: help !important;
+}
+.xrh-tag[data-kind="nofollow"] { background: #e0245e !important; }
+.xrh-tag[data-kind="pending"]  { background: #536471 !important; }
+
+/* ---------- 工具栏 AI 按钮 ---------- */
+.xrh-ai-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  min-width: 34px !important;
+  height: 34px !important;
+  padding: 0 6px !important;
+  margin-left: 2px !important;
+  border: none !important;
+  border-radius: 50% !important;
+  background: transparent !important;
+  color: #1d9bf0 !important;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif !important;
+  font-size: 11px !important;
+  font-weight: 800 !important;
+  line-height: 1 !important;
+  cursor: pointer !important;
+  transition: background-color .15s !important;
+  user-select: none !important;
+}
+.xrh-ai-btn:hover { background: rgba(29, 155, 240, .12) !important; }
+.xrh-ai-btn[data-busy="1"] { opacity: .45 !important; cursor: progress !important; }
+.xrh-ai-btn[data-err="1"]  { color: #f4212e !important; }
+.xrh-ai-btn[data-err="1"]:hover { background: rgba(244, 33, 46, .12) !important; }

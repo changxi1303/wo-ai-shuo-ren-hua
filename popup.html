@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{width:392px;max-height:588px;overflow-y:auto;background:#16181c;color:#e7e9ea;
+       font:13px/1.55 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+  body::-webkit-scrollbar{width:8px}
+  body::-webkit-scrollbar-thumb{background:#2f3336;border-radius:4px}
+
+  header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:8px;
+         padding:11px 14px;background:#1d1f23;border-bottom:1px solid #2f3336}
+  header .logo{width:22px;height:22px;border-radius:50%;background:#1d9bf0;color:#fff;
+               font:800 12px/22px system-ui;text-align:center}
+  header h1{font-size:13.5px;font-weight:800;flex:1}
+  header .v{font-size:10.5px;color:#71767b;font-weight:600}
+
+  section{padding:12px 14px;border-bottom:1px solid #212327}
+  .st{font-size:10.5px;font-weight:800;color:#71767b;letter-spacing:.5px;
+      text-transform:uppercase;margin-bottom:9px}
+
+  .row{margin-bottom:9px}
+  .row:last-child{margin-bottom:0}
+  label{display:block;font-size:11px;color:#8b98a5;margin-bottom:3px;font-weight:600}
+  .hint{font-size:10.5px;color:#71767b;margin-top:3px;line-height:1.5}
+
+  input[type=text],input[type=password],input[type=number],select,textarea{
+    width:100%;padding:7px 9px;border:1px solid #2f3336;border-radius:8px;
+    background:#1d1f23;color:#e7e9ea;font:12px/1.5 inherit;outline:none}
+  input:focus,select:focus,textarea:focus{border-color:#1d9bf0}
+  textarea{resize:vertical;min-height:96px;font-size:11.5px;line-height:1.6}
+  input[type=number]{width:78px}
+
+  .kwrap{position:relative}
+  .kwrap input{padding-right:44px}
+  .eye{position:absolute;right:5px;top:50%;transform:translateY(-50%);
+       padding:3px 8px;border-radius:6px;background:none;border:none;
+       color:#71767b;font-size:11px;font-weight:700;cursor:pointer}
+  .eye:hover{background:#2f3336;color:#e7e9ea}
+
+  .two{display:flex;gap:8px}
+  .two>div{flex:1}
+
+  .toggles{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+  .tg{display:flex;align-items:center;gap:7px;padding:7px 9px;border:1px solid #2f3336;
+      border-radius:8px;cursor:pointer;font-size:11.5px;user-select:none}
+  .tg:hover{background:#1d1f23}
+  .tg input{appearance:none;width:28px;height:16px;border-radius:8px;background:#3a3f43;
+            position:relative;cursor:pointer;transition:.15s;flex:none;margin:0}
+  .tg input::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;
+                   border-radius:50%;background:#8b98a5;transition:.15s}
+  .tg input:checked{background:#1d9bf0}
+  .tg input:checked::after{left:14px;background:#fff}
+  .tg span{flex:1;color:#a8b3bd}
+  .tg input:checked+span{color:#e7e9ea}
+
+  .btns{display:flex;gap:7px}
+  .btn{flex:1;padding:8px;border:none;border-radius:18px;font-size:12px;font-weight:800;
+       cursor:pointer;background:#2f3336;color:#e7e9ea}
+  .btn:hover{background:#3d4347}
+  .btn.pri{background:#1d9bf0;color:#fff}
+  .btn.pri:hover{background:#1a8cd8}
+  .btn.danger{background:#2f3336;color:#f4212e}
+  .btn.danger:hover{background:rgba(244,33,46,.16)}
+  .btn:disabled{opacity:.5;cursor:progress}
+  .btn.sm{padding:5px 11px;font-size:11px;flex:none;border-radius:14px}
+
+  #status{display:none;margin:0 14px 12px;padding:9px 11px;border-radius:9px;
+          font-size:11.5px;line-height:1.6;white-space:pre-wrap;word-break:break-word}
+  #status.ok{display:block;background:rgba(22,163,74,.14);color:#4ade80;border:1px solid rgba(22,163,74,.4)}
+  #status.err{display:block;background:rgba(244,33,46,.12);color:#ff8a94;border:1px solid rgba(244,33,46,.4)}
+  #status .mono{color:#8b98a5;font-size:10.5px}
+
+  footer{padding:11px 14px 14px}
+  .warn{font-size:10.5px;color:#71767b;line-height:1.6;margin-top:8px}
+  .warn b{color:#d97706}
+  a{color:#1d9bf0}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">话</div>
+  <h1>我爱说人话</h1>
+  <span class="v" id="ver"></span>
+</header>
+
+<section>
+  <div class="st">连接</div>
+  <div class="row">
+    <label for="apiKey">API Key</label>
+    <div class="kwrap">
+      <input type="password" id="apiKey" placeholder="sk-..." autocomplete="off" spellcheck="false">
+      <button class="eye" id="toggleKey" type="button">显示</button>
+    </div>
+    <div class="warn"><b>注意：</b>Key 以明文存在本机 chrome.storage.local，仅通过扩展后台发往你填的服务商。公用电脑请用完清空。</div>
+  </div>
+  <div class="row">
+    <label for="baseUrl">Base URL（OpenAI 兼容）</label>
+    <input type="text" id="baseUrl" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1" spellcheck="false">
+    <div class="hint">改成其他服务商时，保存会自动申请该域名的访问权限，否则请求会被 CORS 拦截。</div>
+  </div>
+  <div class="row">
+    <label for="model">模型</label>
+    <select id="model"></select>
+    <input type="text" id="modelCustom" placeholder="自定义模型名，例如 qwen3-vl-plus" spellcheck="false" style="display:none;margin-top:6px">
+    <div class="hint" id="modelNote"></div>
+  </div>
+  <div class="row">
+    <label for="visionModel">看图模型</label>
+    <select id="visionModel"></select>
+    <div class="hint">帖子带配图时自动切到这个模型，直接读图而不是靠评论区猜。</div>
+  </div>
+  <div class="two" style="margin-top:9px">
+    <div>
+      <label for="imageSize">配图清晰度</label>
+      <select id="imageSize">
+        <option value="small">small（≈600px · 401 tok · 快）</option>
+        <option value="medium">medium（≈1200px · 1480 tok · 慢，读截图小字用）</option>
+      </select>
+    </div>
+    <div>
+      <label for="imagesMaxN">最多带几张图</label>
+      <input type="number" id="imagesMaxN" min="1" max="4" step="1">
+    </div>
+  </div>
+  <div class="hint" style="margin-top:6px">实测图片 token 与分辨率成正比：1200px 是 600px 的 3.7 倍。多图也线性叠加（1 张 394 tok → 3 张 1122 tok）。嫌慢就调小这两项。</div>
+  <div class="btns" style="margin-top:10px">
+    <button class="btn" id="testBtn" type="button">测试连接</button>
+    <button class="btn sm" id="permBtn" type="button" title="为当前 Base URL 域名申请访问权限">授权域名</button>
+  </div>
+</section>
+
+<section>
+  <div class="st">发送与点赞</div>
+  <div class="toggles">
+    <label class="tg"><input type="checkbox" id="autoLike"><span>回复后自动赞原帖</span></label>
+    <label class="tg"><input type="checkbox" id="hardFilter"><span>踩雷硬过滤</span></label>
+  </div>
+  <div class="two" style="margin-top:9px">
+    <div>
+      <label for="autoLikeDelay">点赞基准延迟（毫秒）</label>
+      <input type="number" id="autoLikeDelay" min="250" max="8000" step="50">
+    </div>
+    <div>
+      <label for="autoLikeJitter">随机浮动（±%）</label>
+      <input type="number" id="autoLikeJitter" min="0" max="90" step="5">
+    </div>
+  </div>
+  <div class="hint" id="likeRange"></div>
+  <div class="hint">每次点赞的实际延迟在上面的区间里随机取，不是固定值 —— 固定间隔的机械节奏比延迟本身更容易被识别成自动化。留一点延迟是为了让 X 先把回复处理完，太短可能点赞失败。</div>
+  <div class="warn"><b>说明：</b>自动点赞会在你的账号上真实执行点赞操作。已经赞过的帖子不会重复点。随时可关。</div>
+  <div class="hint">「踩雷硬过滤」按你 152 条历史差评总结的规则做确定性校验：括号引号 「」()、破折号省略号分号、禁语、超 50 字、不是A而是B、说教式开头，命中就丢弃。为补足条数会多要 2 条再筛，所以不会变少。</div>
+</section>
+
+<section>
+  <div class="st">互动追踪</div>
+  <div class="row">
+    <label for="myHandle">我的用户名</label>
+    <input type="text" id="myHandle" placeholder="留空 = 自动识别（识别失败时在这里手填，不带 @）" spellcheck="false">
+    <div class="hint">「你回TA / TA回你」的计数全靠认得出哪个账号是你。左侧导航没有头像链接时自动识别会失败，这时手填一次即可。数据面板里会显示当前认到的账号。</div>
+  </div>
+  <div class="two" style="margin-top:9px">
+    <div>
+      <label for="scanRoundsMax">自动下滑最多轮数</label>
+      <input type="number" id="scanRoundsMax" min="3" max="400" step="5">
+    </div>
+    <div>
+      <label for="scanStepMs">每轮间隔（毫秒）</label>
+      <input type="number" id="scanStepMs" min="250" max="5000" step="50">
+    </div>
+  </div>
+  <div class="hint">数据面板里的「继续下滑扫描」用这两个参数。X 用虚拟列表，滚过去的节点会被卸载，所以插件是<b>边走边记</b>的。间隔太短 X 还没渲染完就滚走了会漏记；轮数决定一次能翻多深。<b>扫完停在当前位置，不滚回顶部</b>——再点一次就接着往下，不用从头重扫。中途可随时停止。</div>
+</section>
+
+<section>
+  <div class="st">生成</div>
+  <div class="two">
+    <div>
+      <label for="candidates">每次候选条数</label>
+      <input type="number" id="candidates" min="1" max="5" step="1">
+    </div>
+    <div>
+      <label for="replyStyle">回复风格</label>
+      <select id="replyStyle"></select>
+    </div>
+  </div>
+  <div class="two" style="margin-top:9px">
+    <div>
+      <label for="temperature">随机度 <span id="tempVal" style="color:#71767b"></span></label>
+      <input type="range" id="temperature" min="0" max="1.6" step="0.1" style="width:100%">
+    </div>
+    <div>
+      <label for="maxTokens">max_tokens</label>
+      <input type="number" id="maxTokens" min="50" max="4000" step="50">
+    </div>
+  </div>
+  <div class="row" style="margin-top:9px">
+    <label for="prompt">系统提示词</label>
+    <textarea id="prompt" spellcheck="false"></textarea>
+    <div class="btns" style="margin-top:6px">
+      <button class="btn sm" id="resetPrompt" type="button">恢复默认提示词</button>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="st">评论区参考</div>
+  <div class="toggles">
+    <label class="tg"><input type="checkbox" id="useComments"><span>仿写评论区</span></label>
+    <label class="tg"><input type="checkbox" id="autoScrollComments"><span>自动下滑加载</span></label>
+  </div>
+  <div class="row" style="margin-top:9px">
+    <label for="maxComments">最多带多少条评论当参考</label>
+    <input type="number" id="maxComments" min="1" max="40" step="1">
+    <div class="hint">开启后把这条帖子下面别人已发的回复一起给模型当<b>仿写样本</b>（这里的「自动下滑」只为多加载几条评论，加载完会滚回原位，与数据面板的「继续下滑扫描」是两回事）。它们是已经发出去、被这条帖子接纳了的回复，等于告诉模型「在这条帖子下面什么样的话是搭的」——模型会照着它们的语气、句长、口语程度和切入角度写，避免生成跟帖子不搭的通用回复。<br><b>回复对象始终是原帖作者</b>，不会去回答评论里的提问、不会 @ 评论者（提问式评论会被整条剔除，实测能把跑偏率从 33% 压到 0）。<br>参考越多仿得越准，但 token 线性增长。评论多时优先取高赞。「自动下滑」会临时移动你的滚动位置，加载完自动滚回；想让参考更充分就把它打开。</div>
+  </div>
+</section>
+
+<section>
+  <div class="st">行为与界面</div>
+  <div class="toggles">
+    <label class="tg"><input type="checkbox" id="autoGenerate"><span>进帖自动生成</span></label>
+    <label class="tg"><input type="checkbox" id="autoFill"><span>自动填入首条</span></label>
+    <label class="tg"><input type="checkbox" id="showAiBtn"><span>工具栏 AI 按钮</span></label>
+    <label class="tg"><input type="checkbox" id="showFab"><span>悬浮球</span></label>
+    <label class="tg"><input type="checkbox" id="translateUI"><span>界面汉化</span></label>
+    <label class="tg"><input type="checkbox" id="highlightFollow"><span>未回关高亮</span></label>
+    <label class="tg"><input type="checkbox" id="trackInteractions"><span>互动追踪</span></label>
+    <label class="tg"><input type="checkbox" id="disableThinking"><span>关闭思考模式</span></label>
+    <label class="tg"><input type="checkbox" id="useVision"><span>配图时自动看图</span></label>
+  </div>
+  <div class="hint" style="margin-top:8px">「进帖自动生成」会在你每打开一条帖子时静默消耗一次 API 额度，按需开启。<br>「关闭思考模式」对 qwen3.x 系列效果极大：实测延迟从 7-50 秒降到 1-2 秒、token 省约 75%。不支持该参数的服务商（如 glm）会自动回退重试，不影响使用。</div>
+</section>
+
+<section>
+  <div class="st">本地数据</div>
+  <div class="btns">
+    <button class="btn sm" id="exportBtn" type="button">导出</button>
+    <button class="btn sm" id="importBtn" type="button">导入</button>
+    <button class="btn sm danger" id="clearDrafts" type="button">清空草稿</button>
+    <button class="btn sm danger" id="clearStats" type="button">清空互动数据</button>
+  </div>
+  <input type="file" id="importFile" accept="application/json,.json" style="display:none">
+  <div class="hint" id="dataInfo" style="margin-top:8px"></div>
+</section>
+
+<div id="status" role="status"></div>
+
+<footer>
+  <div class="btns">
+    <button class="btn" id="resetBtn" type="button">恢复全部默认</button>
+    <button class="btn pri" id="saveBtn" type="button">保存</button>
+  </div>
+</footer>
+
+<script src="defaults.js"></script>
+<script src="popup.js"></script>
+</body>
+</html>

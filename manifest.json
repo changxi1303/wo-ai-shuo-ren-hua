@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "我爱说人话",
+  "version": "2.16.0",
+  "description": "AI 回复候选 + 草稿箱复制/填入/备注 + 踩雷硬过滤 + 看图与评论区上下文 + 回复后自动点赞 + 互动追踪与诊断 + 未回关高亮 + 界面汉化",
+  "permissions": ["storage", "clipboardWrite"],
+  "host_permissions": [
+    "https://x.com/*",
+    "https://twitter.com/*",
+    "https://dashscope.aliyuncs.com/*"
+  ],
+  "optional_host_permissions": ["https://*/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://x.com/*", "https://twitter.com/*"],
+      "js": ["intercept.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": false
+    },
+    {
+      "matches": ["https://x.com/*", "https://twitter.com/*"],
+      "js": ["defaults.js", "content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "我爱说人话"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
