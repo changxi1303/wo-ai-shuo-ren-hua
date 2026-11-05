@@ -236,6 +236,11 @@
     highlightFollow: true,
     trackInteractions: true,
     showFab: true,
+    // 给「有互动记录、但今天还没互动过」的人在徽章上加一个小点。
+    // 用途是每天扫一眼就知道还有谁没搭上话，方便按人维持关系。
+    // 只标已经在追踪的人（有 out/inn 记录的），没互动过的陌生人不标 —— 否则整屏都是点。
+    markStale: true,
+
 
     // 互动追踪：自动识别失败时在这里手填自己的用户名（不带 @）
     myHandle: "",

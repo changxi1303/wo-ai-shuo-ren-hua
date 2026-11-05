@@ -32,6 +32,21 @@
 .xrh-badge[data-state="out"]    { background: #2563eb !important; }
 .xrh-badge[data-state="in"]     { background: #d97706 !important; }
 
+/* 「今天还没互动过」小点。用琥珀色 + 深色描边，
+   在绿(mutual)/蓝(out)/橙(in) 三种徽章底色上都拉得开对比。
+   不做呼吸动画：一屏可能有十几个徽章同时闪，反而看不清也费电。 */
+.xrh-badge .xd {
+  display: inline-block !important;
+  width: 5px !important;
+  height: 5px !important;
+  margin-left: 3px !important;
+  border-radius: 50% !important;
+  background: #ffd400 !important;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .45) !important;
+  flex: none !important;
+  vertical-align: middle !important;
+}
+
 /* ---------- 关注关系标签 ---------- */
 .xrh-tag {
   display: inline-flex !important;

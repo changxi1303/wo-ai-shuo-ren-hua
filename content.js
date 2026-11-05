@@ -1967,6 +1967,24 @@
     return { s: "none", a: "·", o: 0, i: 0 };
   }
 
+  // 互动徽章上的「今天还没互动过」小点。
+  // 判据用 handles[h].ts —— 那是 recordOut/recordIn 在「真的新增了一条互动」时才刷新的时间戳，
+  // 所以它等于「最后一次真互动」，不是「最后一次被扫到」。被动扫描反复读到同一批数据不会把它顶新。
+  function dayKey(t) {
+    var d = new Date(t);
+    return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
+  }
+  function isToday(ts) {
+    return !!ts && dayKey(ts) === dayKey(Date.now());
+  }
+  function agoText(ts) {
+    if (!ts) return "没有记录";
+    var ms = Date.now() - ts;
+    if (isToday(ts)) return "今天 " + new Date(ts).toTimeString().slice(0, 5);
+    if (ms < 48 * 3600 * 1000) return "昨天";
+    return Math.round(ms / 86400000) + " 天前";
+  }
+
   // X 的虚拟列表会复用 DOM 节点。原代码「已有徽章就 return」会把上一个人的数据
   // 显示在当前人身上，这里改成按 handle 比对并原地更新。
   function badgeArticle(art) {
@@ -1982,14 +2000,27 @@
     var st = stateOf(a[h]);
     if (st.s === "none") { if (badge) badge.remove(); return; }
 
+    var v = a[h] || {};
+    var stale = CFG.markStale !== false && !isToday(v.ts);
     var label = st.a + st.o + "|" + st.i;
-    if (badge && badge.dataset.h === h && badge.textContent === label) return;
+    // 缓存键必须带上 stale：跨天时 label 一个字都没变，只有 stale 会翻转，
+    // 只比 textContent 的话小点永远不会更新（也不会消失）。
+    var key = label + (stale ? "|s" : "");
+    if (badge && badge.dataset.h === h && badge.dataset.k === key) return;
     if (!badge) { badge = el("span", { cls: "xrh-badge" }); nr.appendChild(badge); }
     badge.dataset.h = h;
+    badge.dataset.k = key;
     badge.dataset.state = st.s;
-    badge.textContent = label;
-    badge.title = "@" + h + "\n你回 TA：" + st.o + " 次\nTA 回你：" + st.i + " 次";
+    if (stale) badge.dataset.stale = "1"; else delete badge.dataset.stale;
+    // 不能用 textContent= ：那会把小点一起抹掉
+    badge.textContent = "";
+    badge.appendChild(document.createTextNode(label));
+    if (stale) badge.appendChild(el("i", { cls: "xd" }));
+    badge.title = "@" + h + "\n你回TA：" + st.o + " 次\nTA回你：" + st.i + " 次" +
+      "\n上次互动：" + agoText(v.ts) +
+      (stale ? "\n今天还没和 TA 互动过" : "\n今天已经互动过了");
   }
+
 
   function badgesIn(root) {
     if (!CFG.trackInteractions || !DATA.me) return;
@@ -2662,6 +2693,7 @@
     ".d .h .lnk{font-weight:700;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
     ".tag{background:#2f3336;color:#a8b3bd;border-radius:8px;padding:1px 6px;font-size:10px;font-weight:700;white-space:nowrap}",
     ".tag.warn{background:rgba(255,173,31,.16);color:#ffad1f}",
+    ".tag.ok{background:rgba(22,163,74,.18);color:#4ade80}",
     ".chips{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:9px}",
     ".chip{padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;background:#1d1f23;color:#71767b;border:1px solid #2f3336}",
     ".chip:hover{color:#e7e9ea;border-color:#3d4347}",
@@ -3281,6 +3313,52 @@
       card("你回TA", outN, "条"),
       card("TA回你", inN, "条")
     ]));
+
+    // ---------- 今日未互动 ----------
+    // 时间线上的小点只能标出你正好刷到的人；这里给完整名单，
+    // 不用为了找谁没搭上话而一直往下滚。
+    if (CFG.markStale !== false) {
+      var stale = hs.map(function (h) { return { h: h, v: a.handles[h] }; })
+        .filter(function (x) { return !isToday(x.v.ts); })
+        // 最近互动过的排前面：关系还热着，今天补一句最划算；半年前的排后面
+        .sort(function (p, q) { return (q.v.ts || 0) - (p.v.ts || 0); });
+      panelBody.appendChild(el("div", { cls: "sec" }, [
+        "今日未互动", el("span", { cls: "n", text: String(stale.length) }), el("span", { cls: "sp" }),
+        el("span", { style: "font-size:10px;color:#71767b;font-weight:600;text-transform:none;letter-spacing:0", text: "今天已互动 " + (hs.length - stale.length) + " 人" })
+      ]));
+      if (!hs.length) {
+        panelBody.appendChild(el("div", { cls: "hint", text: "还没有追踪到任何人。互动追踪靠被动扫描累积，你刷到过的回复才会被记下来；想补历史用上面的「继续下滑扫描」。" }));
+      } else if (!stale.length) {
+        panelBody.appendChild(el("div", { cls: "hint", text: "追踪的 " + hs.length + " 个人今天全都互动过了。" }));
+      } else {
+        panelBody.appendChild(el("div", { cls: "scanrow" }, [
+          el("button", {
+            cls: "b", text: "复制名单", title: "复制这批用户名（每行一个，带 @），按上次互动由近到远",
+            on: {
+              click: function () {
+                var txt = stale.map(function (x) { return "@" + x.h; }).join("\n");
+                copyText(txt).then(function (ok) { toast(ok ? ("已复制 " + stale.length + " 个用户名") : "复制失败，浏览器拒绝了剪贴板", ok ? "ok" : "err", 3000); });
+              }
+            }
+          }),
+          el("span", { style: "font-size:10.5px;color:#71767b;flex:1", text: "按上次互动由近到远排" })
+        ]));
+        stale.slice(0, 60).forEach(function (x) {
+          var o = (x.v.out || []).length, i = (x.v.inn || []).length;
+          panelBody.appendChild(el("div", { cls: "d" }, [
+            el("div", { cls: "h" }, [
+              el("a", { cls: "lnk", text: "@" + x.h, attrs: { href: "https://x.com/" + x.h, target: "_blank", rel: "noreferrer" } }),
+              el("span", { cls: "sp" }),
+              el("span", { cls: "tag" + (o && i ? " ok" : ""), text: (o && i) ? "双向" : (o ? "只你回TA" : "只TA回你") })
+            ]),
+            el("div", { cls: "meta", text: "你回TA " + o + " 次 · TA回你 " + i + " 次 · 上次互动 " + agoText(x.v.ts) })
+          ]));
+        });
+        if (stale.length > 60) {
+          panelBody.appendChild(el("div", { cls: "hint", text: "只显示前 60 个（共 " + stale.length + " 个）。点「复制名单」拿全部。" }));
+        }
+      }
+    }
 
     // ---------- 手速：按最近的实际发送速度，预估一天能回多少条 ----------
     var s10 = sendRate(10), s60 = sendRate(60);
@@ -4139,6 +4217,11 @@
     if (!CFG.showAiBtn) $$(".xrh-ai-btn").forEach(function (n) { n.remove(); });
     if (!CFG.trackInteractions) $$(".xrh-badge").forEach(function (n) { n.remove(); });
     if (!CFG.highlightFollow) $$(".xrh-tag").forEach(function (n) { n.remove(); });
+    // 清掉徽章的缓存键再重画：badgeArticle 用 dataset.k 做「没变就不动」的短路，
+    // 而 markStale 开关只影响那个小点、不影响标签文字，不清键的话
+    // 关掉开关小点不消失、打开开关小点也不出现。
+    $$(".xrh-badge").forEach(function (n) { delete n.dataset.k; });
+    if (CFG.trackInteractions) { try { badgesIn(document.body); } catch (e) {} }
     // popup 里关掉总开关要立刻让注入层停手，不能等页面刷新
     pushFollowCtl();
     updateFollowBadge();
