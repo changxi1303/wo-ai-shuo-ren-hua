@@ -153,7 +153,7 @@
   <div class="hint" id="likeRange"></div>
   <div class="hint">每次点赞的实际延迟在上面的区间里随机取，不是固定值 —— 固定间隔的机械节奏比延迟本身更容易被识别成自动化。留一点延迟是为了让 X 先把回复处理完，太短可能点赞失败。</div>
   <div class="warn"><b>说明：</b>自动点赞会在你的账号上真实执行点赞操作。已经赞过的帖子不会重复点。随时可关。</div>
-  <div class="hint">「踩雷硬过滤」按你 152 条历史差评总结的规则做确定性校验：括号引号 「」()、破折号省略号分号、禁语、超 50 字、不是A而是B、说教式开头，命中就丢弃。为补足条数会多要 2 条再筛，所以不会变少。</div>
+  <div class="hint">「踩雷硬过滤」按你 152 条历史差评总结的规则做确定性校验：括号引号 「」()、破折号省略号分号、禁语、对比句式（比…还 / 不如 / 胜过）、引流话术（戳我 / 私我）、超 70 字、不是A而是B、说教式开头，命中就丢弃。流式生成中的实时候选也走同一套过滤。全部候选都踩雷时不交付，直接提示重新生成。为补足条数会多要几条再筛，所以不会变少。</div>
 </section>
 
 <section>
@@ -225,18 +225,18 @@
   <div class="toggles">
     <label class="tg"><input type="checkbox" id="autoGenerate"><span>进帖自动生成</span></label>
     <label class="tg"><input type="checkbox" id="autoFill"><span>自动填入首条</span></label>
+    <label class="tg"><input type="checkbox" id="autoCopyFirst"><span>生成后自动复制首条</span></label>
     <label class="tg"><input type="checkbox" id="showAiBtn"><span>工具栏 AI 按钮</span></label>
     <label class="tg"><input type="checkbox" id="showFab"><span>悬浮球</span></label>
     <label class="tg"><input type="checkbox" id="translateUI"><span>界面汉化</span></label>
     <label class="tg"><input type="checkbox" id="highlightFollow"><span>未回关高亮</span></label>
     <label class="tg"><input type="checkbox" id="trackInteractions"><span>互动追踪</span></label>
-    <label class="tg"><input type="checkbox" id="markStale"><span>标记今日未互动</span></label>
     <label class="tg"><input type="checkbox" id="followTrack"><span>关注追踪</span></label>
     <label class="tg"><input type="checkbox" id="followShowBadge"><span>关注计数角标</span></label>
     <label class="tg"><input type="checkbox" id="disableThinking"><span>关闭思考模式</span></label>
     <label class="tg"><input type="checkbox" id="useVision"><span>配图时自动看图</span></label>
   </div>
-  <div class="hint" style="margin-top:8px">「进帖自动生成」会在你每打开一条帖子时静默消耗一次 API 额度，按需开启。<br>「标记今日未互动」在互动徽章上加一个琥珀色小点，标出那些<b>你以前互动过、但今天还没搭上话</b>的人，方便按人维持关系。只标已追踪的人，没互动过的陌生人不标，否则整屏都是点。<br>「关注追踪」记录你自己的关注/取关与回关情况，用来防撞限、算冷却、列未回关名单。它还需要在面板「关注」页同意一次数据说明才会真正开始读 —— 未同意前一个关注类响应都不读。只记录不代操作，不会替你关注或取关任何人。<br>「关闭思考模式」对 qwen3.x 系列效果极大：实测延迟从 7-50 秒降到 1-2 秒、token 省约 75%。不支持该参数的服务商（如 glm）会自动回退重试，不影响使用。</div>
+  <div class="hint" style="margin-top:8px">「进帖自动生成」会在你每打开一条帖子时静默消耗一次 API 额度，按需开启。<br>「关注追踪」记录你自己的关注/取关与回关情况，用来防撞限、算冷却、列未回关名单。它还需要在面板「关注」页同意一次数据说明才会真正开始读 —— 未同意前一个关注类响应都不读。只记录不代操作，不会替你关注或取关任何人。<br>「关闭思考模式」对 qwen3.x 系列效果极大：实测延迟从 7-50 秒降到 1-2 秒、token 省约 75%。不支持该参数的服务商（如 glm）会自动回退重试，不影响使用。</div>
 </section>
 
 <section>

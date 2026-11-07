@@ -443,8 +443,66 @@
     return hay.split(needle).length - 1;
   }
 
-  // 直接 textContent= 对 X 的自研 contenteditable 往往无效（React 状态不同步，
-  // 看着有字、点发送却是空的）。所以四级依次尝试，每级都校验是否真的写进去了。
+  // X 只有在编辑器「模型」里真有内容时才会点亮发送按钮。
+  // DOM 里有字、模型没收到时按钮仍是灰的 —— 这是识别「幽灵文本」的客观判据。
+  // 幽灵文本的症状正是用户报的：看得见、退格删不掉、点发送是空的。
+  function composerSendButton(ed) {
+    var scope = ed.closest('[data-testid="tweetInlineReplyForm"], [data-testid="tweetBox"], [data-testid="composerAutosize"]');
+    if (!scope) scope = ed.parentElement;
+    while (scope && scope !== document.body) {
+      var btn = scope.querySelector('[data-testid="tweetButtonInline"], [data-testid="tweetButton"]');
+      if (btn) return btn;
+      scope = scope.parentElement;
+    }
+    return null;
+  }
+
+  // true = 模型已接收 / false = 幽灵文本 / null = 找不到发送按钮，无法判定
+  function composerAcceptsText(ed) {
+    var btn = composerSendButton(ed);
+    if (!btn) return null;
+    return !(btn.disabled || btn.getAttribute("aria-disabled") === "true");
+  }
+
+  // 只走编辑器自己会接收的通道，绝不直接写 textContent。
+  // 三条通道全不被接收就退化成复制，让用户自己 Ctrl+V —— 粘贴走真实通道，可编辑。
+  function tryInputEvents(ed, text) {
+    try {
+      ed.dispatchEvent(new InputEvent("beforeinput", {
+        bubbles: true, cancelable: true, inputType: "insertText", data: text
+      }));
+      ed.dispatchEvent(new InputEvent("input", {
+        bubbles: true, inputType: "insertText", data: text
+      }));
+      return true;
+    } catch (e) { return false; }
+  }
+
+  // X 的发送按钮由 React 异步渲染，插入后立刻查一定还是灰的 —— 同步判据会把正常填入
+  // 误判成幽灵文本并清掉（就是「看不到字」的原因）。所以先照常填入让字立刻可见，
+  // 再分两次延时复核；两次都灰、且内容仍是我们插入的原文，才认定是幽灵文本并清掉改复制。
+  function scheduleComposerCheck(ed, text) {
+    if (!ed) return;
+    var check = function (isFinal) {
+      try {
+        if (!ed.isConnected) return;
+        if (composerAcceptsText(ed) !== false) return;      // 已接收，或找不到按钮无法判定
+        if (!isFinal) { setTimeout(function () { check(true); }, 1200); return; }
+        if (normTxt(ed.textContent) !== normTxt(text)) return;   // 用户已经改过，绝不能动
+        clearEditor(ed);
+        caretToEnd(ed);
+        copyText(text).then(function (ok) {
+          toast(
+            ok ? "自动填入没被 X 接收（发送键仍是灰的），已清掉并复制，请 Ctrl+V 粘贴"
+              : "自动填入没被 X 接收，请手动复制草稿后粘贴",
+            "err", 7000
+          );
+        });
+      } catch (e) {}
+    };
+    setTimeout(function () { check(false); }, 500);
+  }
+
   function fillCompose(text) {
     var ed = findEditor();
     if (!ed) return { ok: false, error: "没找到输入框", diag: editorDiag(), text: text };
@@ -456,7 +514,7 @@
       caretToEnd(ed);
       return { ok: true, how: "already" };
     }
-    // 有任何残留就先清干净，绝不在已有内容后面追加
+    // 有任何残留就先清干净（包括旧版本留下的幽灵文本），绝不在已有内容后面追加
     clearEditor(ed);
 
     var how = [];
@@ -470,50 +528,29 @@
       if (tryPaste(ed, text)) how.push("paste");
     }
 
-    // 3) beforeinput/input 事件序列
+    // 3) beforeinput/input 事件序列：让编辑器自己把字插进它的状态，不由我们改 DOM
     if (!editorHas(ed, text)) {
-      try {
-        clearEditor(ed);
-        ed.dispatchEvent(new InputEvent("beforeinput", {
-          bubbles: true, cancelable: true, inputType: "insertReplacementText", data: text
-        }));
-        ed.textContent = text;
-        ed.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
-        how.push("inputEvent");
-      } catch (e) {}
+      clearEditor(ed);
+      if (tryInputEvents(ed, text)) how.push("inputEvent");
     }
 
-    // 4) 最后兜底：直接写 DOM
-    if (!editorHas(ed, text)) {
-      try {
-        while (ed.firstChild) ed.removeChild(ed.firstChild);
-        ed.textContent = text;
-        ed.dispatchEvent(new Event("input", { bubbles: true }));
-        how.push("dom");
-      } catch (e) {}
-    }
-
-    // 事后防重：X 的编辑器可能在我们写入的同时自己也插了一遍，
-    // 或者某一级"看起来失败其实成功了"导致下一级又追加。发现重复就清空重写一次。
+    // 事后防重：两条通道都生效时会插两遍
     var dup = want ? countOccurrences(normTxt(ed.textContent), want) : 0;
     if (dup > 1) {
       how.push("dedupe:" + dup);
       clearEditor(ed);
       try { document.execCommand("insertText", false, text); } catch (e) {}
-      if (countOccurrences(normTxt(ed.textContent), want) !== 1) {
-        while (ed.firstChild) ed.removeChild(ed.firstChild);
-        ed.textContent = text;
-        try { ed.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text })); } catch (e) {}
-      }
     }
-
 
     caretToEnd(ed);
 
-    if (editorHas(ed, text)) return { ok: true, how: how.join("+") || "none" };
+    if (editorHas(ed, text)) {
+      scheduleComposerCheck(ed, text);
+      return { ok: true, how: how.join("+") || "none" };
+    }
     return {
       ok: false,
-      error: "四级写入都没被 X 的编辑器接收（尝试过：" + (how.join("+") || "无") + "）",
+      error: "X 的编辑器没接收自动填入（尝试过：" + (how.join("+") || "无") + "）",
       diag: editorDiag(),
       text: text
     };
@@ -2001,18 +2038,14 @@
     if (st.s === "none") { if (badge) badge.remove(); return; }
 
     var v = a[h] || {};
-    var stale = CFG.markStale !== false && !isToday(v.ts);
+    var stale = !isToday(v.ts);
     var label = st.a + st.o + "|" + st.i;
-    // 缓存键必须带上 stale：跨天时 label 一个字都没变，只有 stale 会翻转，
-    // 只比 textContent 的话小点永远不会更新（也不会消失）。
     var key = label + (stale ? "|s" : "");
     if (badge && badge.dataset.h === h && badge.dataset.k === key) return;
     if (!badge) { badge = el("span", { cls: "xrh-badge" }); nr.appendChild(badge); }
     badge.dataset.h = h;
     badge.dataset.k = key;
     badge.dataset.state = st.s;
-    if (stale) badge.dataset.stale = "1"; else delete badge.dataset.stale;
-    // 不能用 textContent= ：那会把小点一起抹掉
     badge.textContent = "";
     badge.appendChild(document.createTextNode(label));
     if (stale) badge.appendChild(el("i", { cls: "xd" }));
@@ -2361,6 +2394,9 @@
 
       if (!res.ok) {
         if (!opts.silent) toast(res.error || "生成失败", "err", 6000);
+        if (res.droppedDetail && res.droppedDetail.length) {
+          try { console.info("[我爱说人话] 候选全部被硬过滤丢弃：\n" + res.droppedDetail.join("\n")); } catch (e) {}
+        }
         if (btn) btn.dataset.err = "1";
         renderPanel();
         onDone && onDone(res);      // 失败也要回调，否则自动化流程会永久挂住
@@ -2388,18 +2424,27 @@
       if (res.allBad) {
         msg = "⚠ 这 " + res.items.length + " 条都踩雷了，已标在卡片上。原因：" +
           ((res.warnings || [])[0] || "未知") + "。可点「✎ 备注」让它重写";
-        toast(msg, "err", 6000);
-      } else {
-        toast(msg, res.dropped ? "" : "ok", res.dropped ? 4200 : 3200);
       }
       if (res.droppedDetail && res.droppedDetail.length) {
         try { console.info("[我爱说人话] 已过滤的踩雷候选：\n" + res.droppedDetail.join("\n")); } catch (e) {}
       }
-      if (CFG.autoFill && !opts.refine) {
-        if (fillOrCopy(res.items[0])) markUsed(ctx.id, 0);
-      }
-      renderPanel();
-      onDone && onDone(res);
+      var firstText = res.items.length ? res.items[0] : "";
+      var autoCopy = CFG.autoCopyFirst !== false && !!firstText;
+      var finish = function (copied) {
+        if (autoCopy) msg += copied ? "，已自动复制第 1 条" : "，自动复制失败，请手动复制";
+        if (res.allBad) {
+          toast(msg, "err", 6000);
+        } else {
+          toast(msg, (autoCopy && !copied) ? "err" : (res.dropped ? "" : "ok"), res.dropped ? 4200 : 3200);
+        }
+        if (CFG.autoFill && !opts.refine) {
+          if (fillOrCopy(res.items[0])) markUsed(ctx.id, 0);
+        }
+        renderPanel();
+        onDone && onDone(res);
+      };
+      if (autoCopy) copyText(firstText).then(finish);
+      else finish(false);
     }).catch(function (e) {
       delete generating[lockKey];
       if (btn) { btn.dataset.busy = "0"; btn.textContent = "AI"; }
@@ -3292,12 +3337,11 @@
     if (!a) { panelBody.appendChild(el("div", { cls: "empty", text: "识别到账号后这里会显示统计" })); return; }
 
     var hs = Object.keys(a.handles);
-    var outN = 0, inN = 0, mutual = [], rows = [];
+    var outN = 0, inN = 0, mutual = [];
     hs.forEach(function (h) {
       var v = a.handles[h];
       var o = (v.out || []).length, i = (v.inn || []).length;
       outN += o; inN += i;
-      rows.push({ h: h, o: o, i: i, s: o + i });
       if (o && i) mutual.push({ h: h, o: o, i: i, s: o + i });
     });
 
@@ -3313,52 +3357,6 @@
       card("你回TA", outN, "条"),
       card("TA回你", inN, "条")
     ]));
-
-    // ---------- 今日未互动 ----------
-    // 时间线上的小点只能标出你正好刷到的人；这里给完整名单，
-    // 不用为了找谁没搭上话而一直往下滚。
-    if (CFG.markStale !== false) {
-      var stale = hs.map(function (h) { return { h: h, v: a.handles[h] }; })
-        .filter(function (x) { return !isToday(x.v.ts); })
-        // 最近互动过的排前面：关系还热着，今天补一句最划算；半年前的排后面
-        .sort(function (p, q) { return (q.v.ts || 0) - (p.v.ts || 0); });
-      panelBody.appendChild(el("div", { cls: "sec" }, [
-        "今日未互动", el("span", { cls: "n", text: String(stale.length) }), el("span", { cls: "sp" }),
-        el("span", { style: "font-size:10px;color:#71767b;font-weight:600;text-transform:none;letter-spacing:0", text: "今天已互动 " + (hs.length - stale.length) + " 人" })
-      ]));
-      if (!hs.length) {
-        panelBody.appendChild(el("div", { cls: "hint", text: "还没有追踪到任何人。互动追踪靠被动扫描累积，你刷到过的回复才会被记下来；想补历史用上面的「继续下滑扫描」。" }));
-      } else if (!stale.length) {
-        panelBody.appendChild(el("div", { cls: "hint", text: "追踪的 " + hs.length + " 个人今天全都互动过了。" }));
-      } else {
-        panelBody.appendChild(el("div", { cls: "scanrow" }, [
-          el("button", {
-            cls: "b", text: "复制名单", title: "复制这批用户名（每行一个，带 @），按上次互动由近到远",
-            on: {
-              click: function () {
-                var txt = stale.map(function (x) { return "@" + x.h; }).join("\n");
-                copyText(txt).then(function (ok) { toast(ok ? ("已复制 " + stale.length + " 个用户名") : "复制失败，浏览器拒绝了剪贴板", ok ? "ok" : "err", 3000); });
-              }
-            }
-          }),
-          el("span", { style: "font-size:10.5px;color:#71767b;flex:1", text: "按上次互动由近到远排" })
-        ]));
-        stale.slice(0, 60).forEach(function (x) {
-          var o = (x.v.out || []).length, i = (x.v.inn || []).length;
-          panelBody.appendChild(el("div", { cls: "d" }, [
-            el("div", { cls: "h" }, [
-              el("a", { cls: "lnk", text: "@" + x.h, attrs: { href: "https://x.com/" + x.h, target: "_blank", rel: "noreferrer" } }),
-              el("span", { cls: "sp" }),
-              el("span", { cls: "tag" + (o && i ? " ok" : ""), text: (o && i) ? "双向" : (o ? "只你回TA" : "只TA回你") })
-            ]),
-            el("div", { cls: "meta", text: "你回TA " + o + " 次 · TA回你 " + i + " 次 · 上次互动 " + agoText(x.v.ts) })
-          ]));
-        });
-        if (stale.length > 60) {
-          panelBody.appendChild(el("div", { cls: "hint", text: "只显示前 60 个（共 " + stale.length + " 个）。点「复制名单」拿全部。" }));
-        }
-      }
-    }
 
     // ---------- 手速：按最近的实际发送速度，预估一天能回多少条 ----------
     var s10 = sendRate(10), s60 = sendRate(60);
@@ -3379,24 +3377,6 @@
         el("div", { cls: "used-n", text: (s10.newest ? "最近一次发送 " + timeAgo(s10.newest) + "　·　" : "") + "共记录 " + s60.total + " 次发送" })
       ]));
       panelBody.appendChild(el("div", { cls: "hint", text: "只统计你真实点「回复」发送的时刻，所以历史数据一次灌进来多少都不会污染这个速度。全天不停是理论上限（×24），按每天 8 小时更接近实际。最多保留最近 " + SENDS_MAX + " 次发送。" }));
-    }
-
-    // 「互动最频繁」只列双向的；数据少时改列全部，否则用户看不到任何进展
-    var list = (mutual.length ? mutual : rows).sort(function (x, y) { return y.s - x.s; }).slice(0, 15);
-    if (list.length) {
-      panelBody.appendChild(el("div", { cls: "sec" }, [
-        mutual.length ? "互动最频繁（双向）" : "已追踪的人",
-        el("span", { cls: "n", text: String(list.length) })
-      ]));
-      var max = list[0].s || 1;
-      list.forEach(function (r) {
-        panelBody.appendChild(el("div", { cls: "row" }, [
-          el("a", { cls: "a lnk", text: "@" + r.h, attrs: { href: "/" + r.h, target: "_blank", rel: "noopener" } }),
-          el("div", { cls: "p" }, [el("i", { style: "width:" + Math.round(r.s / max * 100) + "%;background:" + (r.o && r.i ? "#16a34a" : (r.o ? "#2563eb" : "#d97706")) })]),
-          el("span", { cls: "n", text: r.o + "↔" + r.i })
-        ]));
-      });
-      panelBody.appendChild(el("div", { cls: "hint", text: "数字含义：左边是你回 TA 的条数，右边是 TA 回你的条数。绿色=双向，蓝色=只有你回，橙色=只有 TA 回。" }));
     }
 
     var fp = countFollowPage();
@@ -4217,10 +4197,6 @@
     if (!CFG.showAiBtn) $$(".xrh-ai-btn").forEach(function (n) { n.remove(); });
     if (!CFG.trackInteractions) $$(".xrh-badge").forEach(function (n) { n.remove(); });
     if (!CFG.highlightFollow) $$(".xrh-tag").forEach(function (n) { n.remove(); });
-    // 清掉徽章的缓存键再重画：badgeArticle 用 dataset.k 做「没变就不动」的短路，
-    // 而 markStale 开关只影响那个小点、不影响标签文字，不清键的话
-    // 关掉开关小点不消失、打开开关小点也不出现。
-    $$(".xrh-badge").forEach(function (n) { delete n.dataset.k; });
     if (CFG.trackInteractions) { try { badgesIn(document.body); } catch (e) {} }
     // popup 里关掉总开关要立刻让注入层停手，不能等页面刷新
     pushFollowCtl();

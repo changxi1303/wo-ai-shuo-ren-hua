@@ -204,7 +204,7 @@ function formatReplies(replies) {
     "· 仿写有两条硬性优先级，冲突时按这个顺序：",
     "  1) 接住原帖一个具体的点，永远高于仿写。参考里若有「可惜了」「唉」这种空泛回复，",
     "     绝对不要学它们的空泛 —— 参考只给语气样本，不给「可以不具体」的许可。",
-    "  2) 20 字最好、50 字封顶，永远高于仿写。参考里有长句也不要跟着写长。",
+    "  2) 25-40 字最好、70 字封顶，永远高于仿写。参考里有长句也不要跟着写长。",
     "· 你要回复的是【原帖作者】，不是这些人。不要回答他们提的问题，不要 @ 他们，不要接他们的话头。",
     "· 参考跟原帖关系不大时直接忽略，回到原帖本身。",
     ""
@@ -332,7 +332,12 @@ var BAN_JARGON = /(方案|战略|项目|计划|想法|建议|需求|能力|价�
 // v2.17 放宽：原来要求「而是/，是/,是」，实测漏掉了不带逗号的形态
 // （真实样本「代言的不是饮料是流量」）。放宽后在 460 条带标签样本上命中 2 条，2 条都被判有缺陷。
 var BAN_STRUCT = /不是[^。！？!?\n]{1,16}(而是|，是|,是|是)/;
-var LEN_MAX = 50;
+// 对比句式：用户明确要求回复里不要出现「比 xxx」这类比较。
+// 负向前瞻放行非对比用法：比如 / 比赛 / 比分 / 比例 / 比率 / 比重 / 比较 / 比值 / 比照。
+var BAN_COMPARE = /比(?!如|赛|分|例|率|重|较|值|照)|不如|比不上|胜过|强过|优于|秒杀|吊打|碾压|完胜/;
+// 引流话术：回复里不该出现「戳我」这类引导动作。
+var BAN_CTA = /(戳我|戳这里|戳链接|私我|私信我|滴滴我)/;
+var LEN_MAX = 70;
 
 // 以下四条是 v2.17 新增，全部在 460 条「真实帖子 × 真实模型产出 × LLM 逐条判定」的
 // 带标签样本上离线调过参，精确率写在各自注释里。加规则前请照同样方式量一遍，别凭感觉。
@@ -380,27 +385,54 @@ function auditItem(s) {
   var flt = s.match(BAN_FLATTER);
   if (flt) hits.push("夸对方措辞(" + flt[0].slice(0, 12) + ")");
   if (BAN_APHORISM_SHAPE.test(s.trim()) && BAN_APHORISM_WORD.test(s)) hits.push("金句腔(对仗+升华)");
+  var cmp = s.match(BAN_COMPARE);
+  if (cmp) hits.push("对比句式(" + cmp[0] + ")");
+  var cta = s.match(BAN_CTA);
+  if (cta) hits.push("引流话术(" + cta[0] + ")");
   return hits;
 }
 
-// 干净的优先；全踩雷时按违规数排序返回最轻的，并带上原因，不返回空列表
+// 「超长」只是长度问题，不算禁用词；其余命中都是硬违规。
+function isSoftHit(h) { return /^超长/.test(h); }
+
+function hasHardHit(s) {
+  var hits = auditItem(s);
+  for (var i = 0; i < hits.length; i++) if (!isSoftHit(hits[i])) return true;
+  return false;
+}
+
+// 干净的优先；只超长的放行并带原因；硬违规一律不交付。
+// 全部踩雷时返回空列表，由 shapeResult 转成明确报错 ——
+// 旧行为是「按违规数排序返回最轻的」，那正是禁用词仍会出现在草稿里的原因。
 function hardFilter(items) {
   var audited = items.map(function (t) { return { text: t, hits: auditItem(t) }; });
+  var detail = function (list) {
+    return list.map(function (a) { return a.text + " ← " + a.hits.join("、"); });
+  };
   var clean = audited.filter(function (a) { return !a.hits.length; });
   if (clean.length) {
     return {
       items: clean.map(function (a) { return a.text; }),
       dropped: audited.length - clean.length,
-      droppedDetail: audited.filter(function (a) { return a.hits.length; })
-        .map(function (a) { return a.text + " ← " + a.hits.join("、"); }),
+      droppedDetail: detail(audited.filter(function (a) { return a.hits.length; })),
       allBad: false
+    };
+  }
+  var soft = audited.filter(function (a) { return a.hits.length && a.hits.every(isSoftHit); });
+  if (soft.length) {
+    return {
+      items: soft.map(function (a) { return a.text; }),
+      dropped: audited.length - soft.length,
+      droppedDetail: detail(audited.filter(function (a) { return !a.hits.every(isSoftHit); })),
+      allBad: false,
+      warnings: soft.map(function (a) { return a.hits.join("、"); })
     };
   }
   audited.sort(function (x, y) { return x.hits.length - y.hits.length; });
   return {
-    items: audited.map(function (a) { return a.text; }),
-    dropped: 0,
-    droppedDetail: [],
+    items: [],
+    dropped: audited.length,
+    droppedDetail: detail(audited),
     allBad: true,
     warnings: audited.map(function (a) { return a.hits.join("、"); })
   };
@@ -531,9 +563,8 @@ function buildRequest(cfg, msg, refining) {
     : buildUser(tweetText, ask, replies, { notes: notes, imageCount: images.length });
 
   // 重排会让 ask 变大（n=3 时从 4 条变 6 条），token 预算要跟着抬，
-  // 否则第 5、6 条会被截断，白问。80 token/条 是按上限 50 个中文字估的。
-  // ask=4 时 4*80=320 < 默认 400，所以对没开重排的老路径毫无影响。
-  var maxTok = clamp(Math.max(toInt(cfg.maxTokens, 400), ask * 80), 50, 4000);
+  // 否则第 5、6 条会被截断，白问。110 token/条 是按上限 70 个中文字估的。
+  var maxTok = clamp(Math.max(toInt(cfg.maxTokens, 400), ask * 110), 50, 4000);
 
   var body = {
     model: model,
@@ -571,7 +602,15 @@ function shapeResult(res, req, refining) {
     return { ok: false, code: "parse", error: "模型返回内容无法解析成候选", raw: String(content).slice(0, 400) };
   }
   var f = req.cfgHardFilter === false ? { items: items, dropped: 0, droppedDetail: [], allBad: false } : hardFilter(items);
-  if (!f.items.length) f.items = items;
+  if (!f.items.length) {
+    var why = (f.warnings && f.warnings[0]) || "触发禁用规则";
+    return {
+      ok: false,
+      code: "all_filtered",
+      error: "这 " + items.length + " 条候选全部触发禁用规则，已全部丢弃（例：" + why + "）。再点一次生成，或换个风格/模型。",
+      droppedDetail: f.droppedDetail || []
+    };
+  }
   // 重排池：过滤后、切片前的全集。applyRank 会从这个池子里排序再取前 n 条。
   // 先切片再排就等于在已经被截断的集合里排，白问的那几条永远没机会。
   var pool = req.rerank ? f.items.slice(0, LIMITS.rankPoolMax || 8) : null;
@@ -723,6 +762,11 @@ function runChatStream(cfg, msg, refining, onPartial) {
     var now = Date.now();
     if (now - lastPush < 110) return;
     var items = parseCandidates(full, req.ask);
+    // 流式面板上的候选带「可先复制」按钮，必须和最终交付走同一套过滤，
+    // 否则用户能从实时列表里复制到踩雷的句子（禁用词漏出的主要路径之一）。
+    if (req.cfgHardFilter !== false) {
+      items = items.filter(function (t) { return !hasHardHit(t); });
+    }
     if (items.length <= lastCount) return;      // 没有新的完整候选就不推
     lastCount = items.length;
     lastPush = now;
