@@ -2665,6 +2665,11 @@
     ".fab.dragging{cursor:grabbing;transform:none}",
     ".fab .dot{position:absolute;top:-2px;right:-2px;min-width:17px;height:17px;padding:0 4px;border-radius:9px;",
     "background:#f4212e;color:#fff;font:700 10px/17px system-ui;text-align:center;border:2px solid #0f1419}",
+    ".fab .af{position:absolute;bottom:-3px;right:-3px;min-width:18px;height:18px;padding:0 3px;border-radius:9px;",
+    "background:#0f1419;color:#71767b;font:800 10px/14px system-ui;text-align:center;border:2px solid #0f1419;",
+    "cursor:pointer;pointer-events:auto}",
+    ".fab .af.on{background:#1d9bf0;color:#fff}",
+    ".fab .af:hover{filter:brightness(1.25)}",
     ".panel{position:fixed;width:372px;max-height:min(74vh,620px);display:flex;flex-direction:column;",
     "background:#16181c;border:1px solid #2f3336;border-radius:14px;overflow:hidden;pointer-events:auto;",
     "box-shadow:0 12px 40px rgba(0,0,0,.6);font:13px/1.5 system-ui,-apple-system,'Segoe UI',sans-serif;color:#e7e9ea}",
@@ -2672,6 +2677,10 @@
     ".hd{display:flex;align-items:center;gap:8px;padding:10px 12px;background:#1d1f23;border-bottom:1px solid #2f3336}",
     ".hd .t{font-weight:800;font-size:13px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
     ".hd .v{font-size:10px;color:#71767b;font-weight:600}",
+    ".hd .tg{padding:3px 8px;border-radius:8px;font-size:11px;font-weight:700;color:#71767b;",
+    "background:#16181c;border:1px solid #2f3336;white-space:nowrap}",
+    ".hd .tg.on{color:#1d9bf0;border-color:#1d9bf0;background:rgba(29,155,240,.14)}",
+    ".hd .tg:hover{color:#e7e9ea}",
     ".hd .x{width:24px;height:24px;border-radius:50%;color:#71767b;font-size:16px;line-height:1}",
     ".hd .x:hover{background:#2f3336;color:#e7e9ea}",
     ".tabs{display:flex;gap:2px;padding:6px 8px;background:#16181c;border-bottom:1px solid #2f3336}",
@@ -2852,8 +2861,19 @@
 
   function buildPanel() {
     panel.textContent = "";
+    afBtnEl = el("button", {
+      cls: "tg" + (autoFillOn() ? " on" : ""),
+      text: autoFillLabel(),
+      attrs: {
+        role: "switch",
+        "aria-checked": autoFillOn() ? "true" : "false",
+        title: "切换「自动填入首条」：开 = 生成后写进回复框；关 = 只复制不写入"
+      },
+      on: { click: function () { toggleAutoFill(); } }
+    });
     var hd = el("div", { cls: "hd" }, [
       el("div", { cls: "t", text: "我爱说人话" }),
+      afBtnEl,
       el("span", { cls: "v", text: "v" + version() }),
       el("button", { cls: "x", text: "×", title: "收起", on: { click: function () { togglePanel(false); } } })
     ]);
@@ -2883,7 +2903,9 @@
   function togglePanel(force) {
     panelOpen = force != null ? !!force : !panelOpen;
     panel.classList.toggle("hidden", !panelOpen);
-    fab.textContent = panelOpen ? "−" : "话";
+    fab.textContent = panelOpen ? "−" : "话";   // 这会清掉 fab 上所有子节点
+    updateFabDot();                             // 重新挂回草稿数角标和「填」标记
+    syncAutoFillUI();                           // 头部按钮按当前配置刷新
     CFG.panelMin = !panelOpen;
     persistCfg();
     if (panelOpen) { renderPanel(); positionUI(); }
@@ -4092,6 +4114,51 @@
     updateFabDot();
   }
 
+  // ---------- 自动填入开关：面板头部按钮 + 悬浮球标记，两处状态同步 ----------
+  var afBtnEl = null;
+
+  function autoFillOn() { return CFG.autoFill === true; }
+
+  function autoFillLabel() { return "自动填入 " + (autoFillOn() ? "开" : "关"); }
+
+  function syncAutoFillUI() {
+    if (afBtnEl) {
+      afBtnEl.textContent = autoFillLabel();
+      afBtnEl.classList.toggle("on", autoFillOn());
+      afBtnEl.setAttribute("aria-checked", autoFillOn() ? "true" : "false");
+    }
+    updateFabAutoFill();
+  }
+
+  function toggleAutoFill() {
+    var next = !autoFillOn();
+    CFG.autoFill = next;                 // 立刻生效，不等 storage 回环
+    saveCfgField("autoFill", next);
+    syncAutoFillUI();
+    toast(
+      next ? "自动填入已开启：生成后写进回复框，仍可编辑" : "自动填入已关闭：只复制首条，不写回复框",
+      "ok", 2600
+    );
+  }
+
+  // 悬浮球右下角的「填」标记：亮蓝 = 开，暗灰 = 关，点它直接切换。
+  // pointerdown 必须拦住，否则会同时触发悬浮球的拖拽和开面板。
+  function updateFabAutoFill() {
+    if (!fab) return;
+    var b = fab.querySelector(".af");
+    if (!b) {
+      b = el("span", { cls: "af", text: "填" });
+      // pointerdown/pointerup 都要拦：悬浮球的 pointerup 在未拖拽时会切换面板，
+      // 只拦 pointerdown 的话点一下标记会顺带把面板开合一次。
+      b.addEventListener("pointerdown", function (e) { e.stopPropagation(); });
+      b.addEventListener("pointerup", function (e) { e.stopPropagation(); });
+      b.addEventListener("click", function (e) { e.stopPropagation(); toggleAutoFill(); });
+      fab.appendChild(b);
+    }
+    b.classList.toggle("on", autoFillOn());
+    b.setAttribute("title", autoFillOn() ? "自动填入：开（点一下关闭）" : "自动填入：关（点一下开启）");
+  }
+
   function updateFabDot() {
     if (!fab) return;
     var a = acct();
@@ -4100,6 +4167,7 @@
     var old = fab.querySelector(".dot");
     if (old) old.remove();
     if (n && !panelOpen) fab.appendChild(el("span", { cls: "dot", text: String(n) }));
+    updateFabAutoFill();
   }
 
   // ==================== 处理管线 ====================
@@ -4201,6 +4269,7 @@
     // popup 里关掉总开关要立刻让注入层停手，不能等页面刷新
     pushFollowCtl();
     updateFollowBadge();
+    syncAutoFillUI();
     renderPanel();
     positionUI();
   }
