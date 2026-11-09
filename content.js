@@ -339,7 +339,9 @@
   // 三条硬约束。最早那版把提示压在回复框内、被怀疑挡住输入而整块删掉：
   //   1. pointer-events:none —— 永远不吃点击，物理上不可能挡住输入框
   //   2. 固定在屏幕中间偏上 —— 不盖正文、不盖发送按钮，也不和底部居中的 toast 重叠
-  //   3. 用户一按键 / 粘贴 / 滚动 / 点击就立刻消失，不等定时器
+  //   3. 该留的时候留得住：只在「用户开始打字 / 粘贴 / 离开这条帖子」时消失。
+  //      曾经连 click 和 scroll 都触发消失，结果用户还没点到回复框提示就没了。
+  var COPIED_HINT_MS = 15000;
   var copiedHintEl = null, copiedHintTimer = 0, copiedHintBound = false;
 
   function hideCopiedHint() {
@@ -351,9 +353,9 @@
   function bindCopiedHintDismiss() {
     if (copiedHintBound) return;
     copiedHintBound = true;
-    // 捕获阶段：复制按钮自己的 click 要等事件派发完才在微任务里走到 showCopiedHint，
-    // 所以这里的 hide 一定发生在 show 之前，不会自己刚弹出来就被自己关掉。
-    ["keydown", "paste", "scroll", "click", "pointerdown"].forEach(function (ev) {
+    // 只监听这两个：一旦用户动手输入或粘贴，提示的使命就结束了。
+    // 装在捕获阶段，保证 X 自己的 handler 之前就能收掉。
+    ["keydown", "paste"].forEach(function (ev) {
       window.addEventListener(ev, hideCopiedHint, true);
     });
   }
@@ -364,7 +366,7 @@
       hideCopiedHint();
 
       // 位置全部交给 CSS（屏幕中间偏上、水平居中），这里不再找回复框。
-      // 上一版要先 findEditor + 算 getBoundingClientRect，找不到回复框、
+      // 曾经要先 findEditor + 算 getBoundingClientRect，找不到回复框、
       // 或回复框在 <dialog> 顶层里，整条提示就静默不显示 —— 等于功能没生效。
       var isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent || "");
       copiedHintEl = el("div", {
@@ -376,8 +378,8 @@
       copiedHintTimer = setTimeout(function () {
         if (!copiedHintEl) return;
         copiedHintEl.classList.add("hide");
-        copiedHintTimer = setTimeout(hideCopiedHint, 200);
-      }, 2400);
+        copiedHintTimer = setTimeout(hideCopiedHint, 300);
+      }, COPIED_HINT_MS);
     } catch (e) {}
   }
 
@@ -4284,6 +4286,7 @@
     var p = location.pathname + location.search;
     if (p === lastPath) return;
     lastPath = p;
+    hideCopiedHint();   // 离开这条帖子，复制提示立刻收掉
     detectMe();
     passiveScan(document.body);
     // 进详情页就预热 Service Worker：MV3 空闲 30 秒会被回收，冷启动要几百毫秒，
