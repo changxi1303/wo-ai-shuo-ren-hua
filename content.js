@@ -340,8 +340,10 @@
   //   1. pointer-events:none —— 永远不吃点击，物理上不可能挡住输入框
   //   2. 固定在屏幕中间偏上 —— 不盖正文、不盖发送按钮，也不和底部居中的 toast 重叠
   //   3. 该留的时候留得住：只在「用户开始打字 / 粘贴 / 离开这条帖子」时消失。
-  //      曾经连 click 和 scroll 都触发消失，结果用户还没点到回复框提示就没了。
-  var COPIED_HINT_MS = 15000;
+  //      曾经连 click 和 scroll 都触发消失，滚轮一动提示就没了 ——
+  //      用户反馈的「一闪就没」是这个原因，不是停留时间太短。
+  //      所以时长维持 2.4s（用户确认够用），只把消失条件收窄。
+  var COPIED_HINT_MS = 2400;
   var copiedHintEl = null, copiedHintTimer = 0, copiedHintBound = false;
 
   function hideCopiedHint() {
