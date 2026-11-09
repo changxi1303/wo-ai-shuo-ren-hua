@@ -187,6 +187,9 @@
     replyStyle: "short",
     prompt: PROMPT,
     hardFilter: true,     // 踩雷硬过滤：括号引号/禁语/超长/不是A而是B 的候选直接丢掉
+    // 自定义禁词：一行一个（也可用逗号/顿号/分号分隔），纯子串匹配，与内置规则同等效力。
+    // 存字符串而不是数组，方便 popup 直接用 textarea 编辑；解析在 background 的 parseCustomBan。
+    customBanWords: "",
 
     // best-of-N 重排：一次多要几条，再用一次裁判调用排出质量序，取前 N 条。
     //

@@ -369,7 +369,29 @@ var BAN_FLATTER = /(这|那)(个)?(词|字|名字|称呼|标题|说法|问法|�
 var BAN_APHORISM_SHAPE = /^[^，。！？\n]{4,12}，[^，。！？\n]{4,12}$/;
 var BAN_APHORISM_WORD = /(本质|修行|赦免|智慧|浪漫|勇气|答案|终点|起点|格局|境界|底色|注脚|仪式感|真实进度|标准答案|才是本|才是常)/;
 
-function auditItem(s) {
+// 用户自定义禁词：一行一个，也可用逗号/顿号/分号分隔。
+// 纯子串匹配，绝不当正则用 —— 用户输入直接拼进正则等于在生成主链路上
+// 开一个 ReDoS + 语法错误的口子（写错一个括号整次生成就崩）。
+var CUSTOM_BAN_MAX = 200;
+var CUSTOM_BAN_WORD_MAX = 40;
+
+function parseCustomBan(raw) {
+  if (typeof raw !== "string" || !raw.trim()) return [];
+  var seen = {}, out = [];
+  var parts = raw.split(/[\n,，、;；]+/);
+  for (var i = 0; i < parts.length && out.length < CUSTOM_BAN_MAX; i++) {
+    var w = parts[i].trim();
+    if (!w) continue;
+    var chars = Array.from(w);
+    if (chars.length > CUSTOM_BAN_WORD_MAX) w = chars.slice(0, CUSTOM_BAN_WORD_MAX).join("");
+    if (seen[w]) continue;
+    seen[w] = 1;
+    out.push(w);
+  }
+  return out;
+}
+
+function auditItem(s, customBan) {
   var hits = [];
   // 非字符串一律当空处理。这里抛异常的话会一路冒到 runChat 的 reject，
   // 用户看到的是「生成失败」而不是候选 —— 一个脏元素毁掉整次生成不值得。
@@ -402,14 +424,20 @@ function auditItem(s) {
   if (cmp) hits.push("对比句式(" + cmp[0] + ")");
   var cta = s.match(BAN_CTA);
   if (cta) hits.push("引流话术(" + cta[0] + ")");
+  // 自定义禁词：命中一个就够，不把整张词表都列出来刷屏
+  if (customBan && customBan.length) {
+    for (var ci = 0; ci < customBan.length; ci++) {
+      if (s.indexOf(customBan[ci]) >= 0) { hits.push("自定义禁词(" + customBan[ci] + ")"); break; }
+    }
+  }
   return hits;
 }
 
 // 「超长」只是长度问题，不算禁用词；其余命中都是硬违规。
 function isSoftHit(h) { return /^超长/.test(h); }
 
-function hasHardHit(s) {
-  var hits = auditItem(s);
+function hasHardHit(s, customBan) {
+  var hits = auditItem(s, customBan);
   for (var i = 0; i < hits.length; i++) if (!isSoftHit(hits[i])) return true;
   return false;
 }
@@ -417,8 +445,8 @@ function hasHardHit(s) {
 // 干净的优先；只超长的放行并带原因；硬违规一律不交付。
 // 全部踩雷时返回空列表，由 shapeResult 转成明确报错 ——
 // 旧行为是「按违规数排序返回最轻的」，那正是禁用词仍会出现在草稿里的原因。
-function hardFilter(items) {
-  var audited = items.map(function (t) { return { text: t, hits: auditItem(t) }; });
+function hardFilter(items, customBan) {
+  var audited = items.map(function (t) { return { text: t, hits: auditItem(t, customBan) }; });
   var detail = function (list) {
     return list.map(function (a) { return a.text + " ← " + a.hits.join("、"); });
   };
@@ -614,7 +642,7 @@ function shapeResult(res, req, refining) {
   if (!items.length) {
     return { ok: false, code: "parse", error: "模型返回内容无法解析成候选", raw: String(content).slice(0, 400) };
   }
-  var f = req.cfgHardFilter === false ? { items: items, dropped: 0, droppedDetail: [], allBad: false } : hardFilter(items);
+  var f = req.cfgHardFilter === false ? { items: items, dropped: 0, droppedDetail: [], allBad: false } : hardFilter(items, req.cfgCustomBan);
   if (!f.items.length) {
     var why = (f.warnings && f.warnings[0]) || "触发禁用规则";
     return {
@@ -756,6 +784,7 @@ function runChat(cfg, msg, refining) {
   var req = buildRequest(cfg, msg, refining);
   if (req.error) return Promise.resolve(req.error);
   req.cfgHardFilter = cfg.hardFilter;
+  req.cfgCustomBan = parseCustomBan(cfg.customBanWords);
   return chatRequest(req.base, cfg.apiKey, req.body).then(function (res) {
     return shapeResult(res, req, refining);
   }).then(function (out) {
@@ -769,6 +798,7 @@ function runChatStream(cfg, msg, refining, onPartial) {
   var req = buildRequest(cfg, msg, refining);
   if (req.error) return Promise.resolve(req.error);
   req.cfgHardFilter = cfg.hardFilter;
+  req.cfgCustomBan = parseCustomBan(cfg.customBanWords);
 
   var lastPush = 0, lastCount = 0;
   var push = function (full) {
@@ -778,7 +808,7 @@ function runChatStream(cfg, msg, refining, onPartial) {
     // 流式面板上的候选带「可先复制」按钮，必须和最终交付走同一套过滤，
     // 否则用户能从实时列表里复制到踩雷的句子（禁用词漏出的主要路径之一）。
     if (req.cfgHardFilter !== false) {
-      items = items.filter(function (t) { return !hasHardHit(t); });
+      items = items.filter(function (t) { return !hasHardHit(t, req.cfgCustomBan); });
     }
     if (items.length <= lastCount) return;      // 没有新的完整候选就不推
     lastCount = items.length;

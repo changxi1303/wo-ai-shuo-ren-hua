@@ -164,6 +164,7 @@
     cfg.temperature = parseFloat($("temperature").value) || 0;
     cfg.maxTokens = Math.min(4000, Math.max(50, parseInt($("maxTokens").value, 10) || DEF.maxTokens));
     cfg.prompt = $("prompt").value;
+    cfg.customBanWords = $("customBanWords").value;
     TOGGLES.forEach(function (k) { cfg[k] = $(k).checked; });
     return cfg;
   }
@@ -190,6 +191,7 @@
     $("tempVal").textContent = String($("temperature").value);
     $("maxTokens").value = cfg.maxTokens || DEF.maxTokens;
     $("prompt").value = cfg.prompt || DEF.prompt;
+    $("customBanWords").value = cfg.customBanWords || DEF.customBanWords || "";
     // 布尔开关严格按 DEFAULTS 回落，不能因为字段缺失就全勾上
     TOGGLES.forEach(function (k) {
       $(k).checked = (cfg[k] === undefined) ? !!DEF[k] : !!cfg[k];
