@@ -335,6 +335,63 @@
     } catch (e) { return false; }
   }
 
+  // ---------- 复制成功提示（挂在回复框上方） ----------
+  // 三条硬约束。上一版就是因为把提示压在框内、还被怀疑挡住输入，被要求删掉：
+  //   1. pointer-events:none —— 永远不吃点击，物理上不可能挡住输入框
+  //   2. 挂在回复框「上方」而不是框内 —— 不盖正文，也不盖发送按钮
+  //   3. 用户一按键 / 粘贴 / 滚动 / 点击就立刻消失，不等定时器
+  var copiedHintEl = null, copiedHintTimer = 0, copiedHintBound = false;
+
+  function hideCopiedHint() {
+    clearTimeout(copiedHintTimer);
+    if (copiedHintEl && copiedHintEl.parentNode) copiedHintEl.parentNode.removeChild(copiedHintEl);
+    copiedHintEl = null;
+  }
+
+  function bindCopiedHintDismiss() {
+    if (copiedHintBound) return;
+    copiedHintBound = true;
+    // 捕获阶段：复制按钮自己的 click 要等事件派发完才在微任务里走到 showCopiedHint，
+    // 所以这里的 hide 一定发生在 show 之前，不会自己刚弹出来就被自己关掉。
+    ["keydown", "paste", "scroll", "click", "pointerdown"].forEach(function (ev) {
+      window.addEventListener(ev, hideCopiedHint, true);
+    });
+  }
+
+  function showCopiedHint() {
+    try {
+      var ed = findEditor();
+      if (!ed || !editorVisible(ed)) return;
+      var host = ed.closest('[data-testid="tweetInlineReplyForm"], [data-testid="tweetBox"], [data-testid="composerAutosize"]') || ed;
+      var r = host.getBoundingClientRect();
+      // 回复框不在视口里就别弹，否则会飘在屏幕某个无关位置
+      if (!r || r.bottom < 0 || r.top > window.innerHeight) return;
+
+      bindCopiedHintDismiss();
+      hideCopiedHint();
+
+      var isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent || "");
+      copiedHintEl = el("div", {
+        cls: "xrh-copied-hint",
+        text: "已复制，按 " + (isMac ? "⌘V" : "Ctrl+V") + " 粘贴到回复框"
+      });
+      document.body.appendChild(copiedHintEl);
+
+      var h = copiedHintEl.offsetHeight || 28;
+      var w = copiedHintEl.offsetWidth || 200;
+      var top = r.top - h - 6;
+      if (top < 8) top = Math.min(r.top + 6, Math.max(8, window.innerHeight - h - 8));
+      copiedHintEl.style.top = top + "px";
+      copiedHintEl.style.left = clamp(r.left, 8, Math.max(8, window.innerWidth - w - 8)) + "px";
+
+      copiedHintTimer = setTimeout(function () {
+        if (!copiedHintEl) return;
+        copiedHintEl.classList.add("hide");
+        copiedHintTimer = setTimeout(hideCopiedHint, 200);
+      }, 2400);
+    } catch (e) {}
+  }
+
   // ==================== 输入框 ====================
   // 从严到宽分级：优先内联回复框，最后才退到任意 contenteditable。
   // 不再强制要求 data-text 属性 —— X 改版时这个属性是最容易变的。
@@ -2437,9 +2494,13 @@
         } else {
           toast(msg, (autoCopy && !copied) ? "err" : (res.dropped ? "" : "ok"), res.dropped ? 4200 : 3200);
         }
+        var filled = false;
         if (CFG.autoFill && !opts.refine) {
-          if (fillOrCopy(res.items[0])) markUsed(ctx.id, 0);
+          filled = fillOrCopy(res.items[0]);
+          if (filled) markUsed(ctx.id, 0);
         }
+        // 已经填进回复框了就不再提示粘贴，否则「按 Ctrl+V」是误导
+        if (autoCopy && copied && !filled) showCopiedHint();
         renderPanel();
         onDone && onDone(res);
       };
@@ -3127,6 +3188,7 @@
         on: {
           click: function () {
             copyText(item.text).then(function (ok) {
+              if (ok) showCopiedHint();
               toast(ok ? "已复制：" + (item.text.length > 18 ? item.text.slice(0, 18) + "…" : item.text) : "复制失败，请手动选中", ok ? "ok" : "err");
             });
           }
@@ -3231,6 +3293,7 @@
                 on: {
                   click: function () {
                     copyText(t).then(function (ok) {
+                      if (ok) showCopiedHint();
                       toast(ok ? "已复制：" + (t.length > 18 ? t.slice(0, 18) + "…" : t) : "复制失败", ok ? "ok" : "err");
                     });
                   }

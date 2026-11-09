@@ -46,6 +46,25 @@
   vertical-align: middle !important;
 }
 
+/* 复制成功提示：挂在回复框上方。pointer-events:none 是硬约束 ——
+   它永远不吃点击，物理上不可能挡住输入框或发送按钮。 */
+.xrh-copied-hint {
+  position: fixed !important;
+  z-index: 2147483647 !important;
+  padding: 6px 12px !important;
+  border-radius: 8px !important;
+  background: #00ba7c !important;
+  color: #fff !important;
+  font: 700 12px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif !important;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .35) !important;
+  pointer-events: none !important;
+  white-space: nowrap !important;
+  opacity: 1;
+  transition: opacity .18s ease !important;
+}
+
+.xrh-copied-hint.hide { opacity: 0 !important; }
+
 /* ---------- 关注关系标签 ---------- */
 .xrh-tag {
   display: inline-flex !important;
