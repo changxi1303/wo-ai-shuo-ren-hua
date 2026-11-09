@@ -46,17 +46,22 @@
   vertical-align: middle !important;
 }
 
-/* 复制成功提示：挂在回复框上方。pointer-events:none 是硬约束 ——
-   它永远不吃点击，物理上不可能挡住输入框或发送按钮。 */
+/* 复制成功提示：屏幕中间偏上、水平居中。
+   不再挂在回复框附近 —— 上一版依赖 findEditor + 位置计算，
+   找不到回复框、或回复框在 <dialog> 顶层里时整条提示就不显示。
+   pointer-events:none 是硬约束：永远不吃点击，不可能挡住输入框或发送按钮。 */
 .xrh-copied-hint {
   position: fixed !important;
+  top: 24vh !important;
+  left: 50% !important;
+  transform: translateX(-50%) !important;
   z-index: 2147483647 !important;
-  padding: 6px 12px !important;
-  border-radius: 8px !important;
+  padding: 10px 18px !important;
+  border-radius: 10px !important;
   background: #00ba7c !important;
   color: #fff !important;
-  font: 700 12px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif !important;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, .35) !important;
+  font: 800 13px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif !important;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .45) !important;
   pointer-events: none !important;
   white-space: nowrap !important;
   opacity: 1;

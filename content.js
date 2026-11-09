@@ -335,10 +335,10 @@
     } catch (e) { return false; }
   }
 
-  // ---------- 复制成功提示（挂在回复框上方） ----------
-  // 三条硬约束。上一版就是因为把提示压在框内、还被怀疑挡住输入，被要求删掉：
+  // ---------- 复制成功提示（屏幕中间偏上，水平居中） ----------
+  // 三条硬约束。最早那版把提示压在回复框内、被怀疑挡住输入而整块删掉：
   //   1. pointer-events:none —— 永远不吃点击，物理上不可能挡住输入框
-  //   2. 挂在回复框「上方」而不是框内 —— 不盖正文，也不盖发送按钮
+  //   2. 固定在屏幕中间偏上 —— 不盖正文、不盖发送按钮，也不和底部居中的 toast 重叠
   //   3. 用户一按键 / 粘贴 / 滚动 / 点击就立刻消失，不等定时器
   var copiedHintEl = null, copiedHintTimer = 0, copiedHintBound = false;
 
@@ -360,29 +360,18 @@
 
   function showCopiedHint() {
     try {
-      var ed = findEditor();
-      if (!ed || !editorVisible(ed)) return;
-      var host = ed.closest('[data-testid="tweetInlineReplyForm"], [data-testid="tweetBox"], [data-testid="composerAutosize"]') || ed;
-      var r = host.getBoundingClientRect();
-      // 回复框不在视口里就别弹，否则会飘在屏幕某个无关位置
-      if (!r || r.bottom < 0 || r.top > window.innerHeight) return;
-
       bindCopiedHintDismiss();
       hideCopiedHint();
 
+      // 位置全部交给 CSS（屏幕中间偏上、水平居中），这里不再找回复框。
+      // 上一版要先 findEditor + 算 getBoundingClientRect，找不到回复框、
+      // 或回复框在 <dialog> 顶层里，整条提示就静默不显示 —— 等于功能没生效。
       var isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent || "");
       copiedHintEl = el("div", {
         cls: "xrh-copied-hint",
-        text: "已复制，按 " + (isMac ? "⌘V" : "Ctrl+V") + " 粘贴到回复框"
+        text: "✓ 已复制，按 " + (isMac ? "⌘V" : "Ctrl+V") + " 粘贴到回复框"
       });
       document.body.appendChild(copiedHintEl);
-
-      var h = copiedHintEl.offsetHeight || 28;
-      var w = copiedHintEl.offsetWidth || 200;
-      var top = r.top - h - 6;
-      if (top < 8) top = Math.min(r.top + 6, Math.max(8, window.innerHeight - h - 8));
-      copiedHintEl.style.top = top + "px";
-      copiedHintEl.style.left = clamp(r.left, 8, Math.max(8, window.innerWidth - w - 8)) + "px";
 
       copiedHintTimer = setTimeout(function () {
         if (!copiedHintEl) return;
