@@ -250,6 +250,10 @@
     highlightFollow: true,
     trackInteractions: true,
     showFab: true,
+    // 省流：用 declarativeNetRequest 在网络层拦掉推文图片与视频封面（头像不拦）。
+    // 必须拦网络请求而不是 CSS 隐藏 —— 隐藏只是不显示，图片照样下载，一点流量都省不下来。
+    // 默认关：这是用户能明显感知的行为变化，按仓库惯例 opt-in。
+    blockPostImages: false,
 
     // 互动追踪：自动识别失败时在这里手填自己的用户名（不带 @）
     myHandle: "",

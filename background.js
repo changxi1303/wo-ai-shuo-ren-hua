@@ -881,6 +881,51 @@ function handleDefaults() {
   });
 }
 
+// ---------- 帖子图片省流（declarativeNetRequest） ----------
+// 必须在网络层拦：CSS 隐藏只是不显示，图片照样下载，一点流量都省不下来。
+// 只拦推文正文图、视频封面、卡片图；头像在 /profile_images/ 下，不在规则里，不受影响。
+// 「配图时自动看图」也不受影响：content script 从 DOM 读的是 img 的 URL 字符串，
+// 真正去下载图片的是模型服务商（服务端），浏览器这边拦掉不影响生成。
+var IMG_BLOCK_RULE_ID = 910001;
+var IMG_BLOCK_REGEX = "^https://pbs\\.twimg\\.com/(media|amplify_video_thumb|ext_tw_video_thumb|tweet_video_thumb|card_img)/";
+
+function applyImageBlock(on) {
+  try {
+    var dnr = chrome.declarativeNetRequest;
+    if (!dnr || !dnr.updateDynamicRules) return;
+    var addRules = on ? [{
+      id: IMG_BLOCK_RULE_ID,
+      priority: 1,
+      action: { type: "block" },
+      condition: { regexFilter: IMG_BLOCK_REGEX, resourceTypes: ["image"] }
+    }] : [];
+    dnr.updateDynamicRules({ removeRuleIds: [IMG_BLOCK_RULE_ID], addRules: addRules });
+  } catch (e) {}
+}
+
+function syncImageBlock() {
+  try {
+    var key = X.CFG_KEY || "xrh_cfg";
+    chrome.storage.local.get([key], function (r) {
+      var c = (r && r[key]) || {};
+      var on = c.blockPostImages === undefined ? DEF.blockPostImages : c.blockPostImages;
+      applyImageBlock(!!on);
+    });
+  } catch (e) {}
+}
+
+// 动态规则本身是持久化的，但扩展更新/重装会被清掉，所以每次启动都对一遍账
+chrome.runtime.onInstalled.addListener(syncImageBlock);
+chrome.runtime.onStartup.addListener(syncImageBlock);
+syncImageBlock();
+
+chrome.storage.onChanged.addListener(function (ch, area) {
+  if (area !== "local") return;
+  var key = X.CFG_KEY || "xrh_cfg";
+  if (!ch[key] || !ch[key].newValue) return;
+  if ("blockPostImages" in ch[key].newValue) applyImageBlock(!!ch[key].newValue.blockPostImages);
+});
+
 // ---------- 路由 ----------
 chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
   if (!msg || typeof msg.type !== "string" || msg.type.indexOf("xrh:") !== 0) return;

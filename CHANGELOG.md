@@ -4,6 +4,46 @@
 
 ---
 
+## 2.24.0
+
+### 省流模式：不加载帖子图片（悬浮窗一键开关）
+
+用户反馈：刷时间线时帖子图片太费流量，希望在悬浮窗上直接开关。
+
+**为什么用 declarativeNetRequest，而不是 CSS 隐藏**
+
+CSS `display:none` 只是不显示，浏览器照样把图片下载下来 —— 一点流量都省不到。
+要真省流量必须在网络层拦，所以加了 `declarativeNetRequest` 权限，
+用一条动态规则（ID `910001`）block 掉图片请求。
+
+**拦的范围**（`regexFilter`，只作用于 `resourceTypes: ["image"]`）：
+
+```
+^https://pbs\.twimg\.com/(media|amplify_video_thumb|ext_tw_video_thumb|tweet_video_thumb|card_img)/
+```
+
+- 拦：推文正文图、三种视频封面、卡片图
+- 不拦：头像（在 `/profile_images/` 下）、X 自己的 API 请求、模型接口
+- 不拦 `video.twimg.com`：用户说的是「图片」，视频正片没动。要连视频一起省可以再加一条。
+
+**看图功能不受影响**：content script 收集的是 DOM 里 `img` 的 URL 字符串，
+真正下载图片的是模型服务商（服务端）。浏览器这边拦掉，`useVision` 照常工作 ——
+`IMG_OK` 白名单和上面的 `regexFilter` 路径是对齐的（`card_img` 两边都不在视觉白名单里）。
+
+**开关位置**：悬浮球面板头部（`省流 开/关`），弹窗「行为与界面」里也有同一个开关，
+两处共用 `blockPostImages` 字段。**默认关** —— 这是用户能明显感知的行为变化，按仓库惯例 opt-in。
+
+**生效时机**：切换后立即对新请求生效；已经下载过的图片不会消失，继续滚动时新图就不下来了。
+动态规则本身是持久化的，但扩展更新/重装会被清空，所以 `onInstalled` / `onStartup` /
+Service Worker 启动时都会按存储的配置对一次账。
+
+沙箱验证 19 项断言全过：规则形状与固定 ID、命中清单、放行清单（头像 / X API / 视频正片 / 模型接口）、
+开关切换、storage 联动（改别的字段不触发、非 local 区域不触发）、默认值为关。
+
+**未实测**：真实浏览器里的省流量幅度需要用户重载后在 DevTools Network 里确认。
+
+---
+
 ## 2.23.3
 
 ### 复制提示时长回到 2.4 秒

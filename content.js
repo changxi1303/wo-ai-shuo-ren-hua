@@ -2925,8 +2925,19 @@
       },
       on: { click: function () { toggleAutoFill(); } }
     });
+    imgBtnEl = el("button", {
+      cls: "tg" + (blockImgOn() ? " on" : ""),
+      text: blockImgLabel(),
+      attrs: {
+        role: "switch",
+        "aria-checked": blockImgOn() ? "true" : "false",
+        title: "省流模式：开 = 不加载帖子图片和视频封面（头像照常显示，看图生成不受影响）；关 = 正常加载"
+      },
+      on: { click: function () { toggleBlockImages(); } }
+    });
     var hd = el("div", { cls: "hd" }, [
       el("div", { cls: "t", text: "我爱说人话" }),
+      imgBtnEl,
       afBtnEl,
       el("span", { cls: "v", text: "v" + version() }),
       el("button", { cls: "x", text: "×", title: "收起", on: { click: function () { togglePanel(false); } } })
@@ -2960,6 +2971,7 @@
     fab.textContent = panelOpen ? "−" : "话";   // 这会清掉 fab 上所有子节点
     updateFabDot();                             // 重新挂回草稿数角标和「填」标记
     syncAutoFillUI();                           // 头部按钮按当前配置刷新
+    syncBlockImgUI();
     CFG.panelMin = !panelOpen;
     persistCfg();
     if (panelOpen) { renderPanel(); positionUI(); }
@@ -4197,6 +4209,33 @@
     );
   }
 
+  // ---------- 省流开关：不加载帖子图片（悬浮窗头部按钮，与弹窗设置同一字段） ----------
+  var imgBtnEl = null;
+
+  function blockImgOn() { return CFG.blockPostImages === true; }
+
+  function blockImgLabel() { return "省流 " + (blockImgOn() ? "开" : "关"); }
+
+  function syncBlockImgUI() {
+    if (!imgBtnEl) return;
+    imgBtnEl.textContent = blockImgLabel();
+    imgBtnEl.classList.toggle("on", blockImgOn());
+    imgBtnEl.setAttribute("aria-checked", blockImgOn() ? "true" : "false");
+  }
+
+  function toggleBlockImages() {
+    var next = !blockImgOn();
+    CFG.blockPostImages = next;              // 立刻生效，不等 storage 回环
+    // 真正下/撤网络拦截规则的是 background：它监听 storage 变化后调 declarativeNetRequest
+    saveCfgField("blockPostImages", next);
+    syncBlockImgUI();
+    toast(
+      next ? "省流已开启：不再加载帖子图片与视频封面（头像和看图生成不受影响）"
+        : "省流已关闭：恢复加载帖子图片",
+      "ok", 3000
+    );
+  }
+
   // 悬浮球右下角的「填」标记：亮蓝 = 开，暗灰 = 关，点它直接切换。
   // pointerdown 必须拦住，否则会同时触发悬浮球的拖拽和开面板。
   function updateFabAutoFill() {
@@ -4327,6 +4366,7 @@
     pushFollowCtl();
     updateFollowBadge();
     syncAutoFillUI();
+    syncBlockImgUI();
     renderPanel();
     positionUI();
   }

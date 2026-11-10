@@ -231,6 +231,7 @@
     <label class="tg"><input type="checkbox" id="autoGenerate"><span>进帖自动生成</span></label>
     <label class="tg"><input type="checkbox" id="autoFill"><span>自动填入首条</span></label>
     <label class="tg"><input type="checkbox" id="autoCopyFirst"><span>生成后自动复制首条</span></label>
+    <label class="tg"><input type="checkbox" id="blockPostImages"><span>省流：不加载帖子图片</span></label>
     <label class="tg"><input type="checkbox" id="showAiBtn"><span>工具栏 AI 按钮</span></label>
     <label class="tg"><input type="checkbox" id="showFab"><span>悬浮球</span></label>
     <label class="tg"><input type="checkbox" id="translateUI"><span>界面汉化</span></label>
@@ -241,7 +242,7 @@
     <label class="tg"><input type="checkbox" id="disableThinking"><span>关闭思考模式</span></label>
     <label class="tg"><input type="checkbox" id="useVision"><span>配图时自动看图</span></label>
   </div>
-  <div class="hint" style="margin-top:8px">「进帖自动生成」会在你每打开一条帖子时静默消耗一次 API 额度，按需开启。<br>「关注追踪」记录你自己的关注/取关与回关情况，用来防撞限、算冷却、列未回关名单。它还需要在面板「关注」页同意一次数据说明才会真正开始读 —— 未同意前一个关注类响应都不读。只记录不代操作，不会替你关注或取关任何人。<br>「关闭思考模式」对 qwen3.x 系列效果极大：实测延迟从 7-50 秒降到 1-2 秒、token 省约 75%。不支持该参数的服务商（如 glm）会自动回退重试，不影响使用。</div>
+  <div class="hint" style="margin-top:8px">「进帖自动生成」会在你每打开一条帖子时静默消耗一次 API 额度，按需开启。<br>「省流」用 declarativeNetRequest 在<b>网络层</b>拦掉推文图片与视频封面（头像不拦）—— CSS 隐藏省不了流量，图片照样会下载，所以必须拦请求。切换后对新加载的图片立刻生效，已经下载过的不会消失；滚动时新图就不下来了。「配图时自动看图」不受影响，那是模型服务商在服务端抓的图。悬浮球面板头部也有同一个开关。<br>「关注追踪」记录你自己的关注/取关与回关情况，用来防撞限、算冷却、列未回关名单。它还需要在面板「关注」页同意一次数据说明才会真正开始读 —— 未同意前一个关注类响应都不读。只记录不代操作，不会替你关注或取关任何人。<br>「关闭思考模式」对 qwen3.x 系列效果极大：实测延迟从 7-50 秒降到 1-2 秒、token 省约 75%。不支持该参数的服务商（如 glm）会自动回退重试，不影响使用。</div>
 </section>
 
 <section>
